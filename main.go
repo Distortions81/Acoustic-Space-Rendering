@@ -3,9 +3,12 @@ package main
 import (
 	"flag"
 	"image/color"
+	"log"
 	"math"
 	"math/rand"
+	"os"
 	"runtime"
+	"runtime/pprof"
 	"sync"
 	"time"
 
@@ -14,7 +17,7 @@ import (
 
 const (
 	w, h                  = 1024, 1024
-	windowScale           = 2
+	windowScale           = 1
 	damp                  = 0.996
 	speed                 = 0.5
 	waveDamp32            = float32(damp)
@@ -32,9 +35,11 @@ const (
 	wallMaxLen            = 100
 	wallExclusionRadius   = 1
 	wallThicknessVariance = 2
+	pgoRecordDuration     = 15 * time.Second
 )
 
 var showWallsFlag = flag.Bool("show-walls", false, "render wall geometry overlays")
+var recordDefaultPGO = flag.Bool("record-default-pgo", false, "walk randomly for 15s while capturing default.pgo")
 
 type wavePlane [][]float32
 
@@ -203,6 +208,12 @@ type Game struct {
 	listenerForwardX   float64
 	listenerForwardY   float64
 	pixelBuf           []byte
+	autoWalk           bool
+	autoWalkDeadline   time.Time
+	autoWalkRand       *rand.Rand
+	autoWalkDirX       float64
+	autoWalkDirY       float64
+	autoWalkFrameCount int
 }
 
 func newGame() *Game {
@@ -221,6 +232,7 @@ func newGame() *Game {
 		listenerForwardX: 0,
 		listenerForwardY: -1,
 		pixelBuf:         make([]byte, w*h*4),
+		autoWalkRand:     rand.New(rand.NewSource(time.Now().UnixNano() + 2)),
 	}
 	g.workerCond = sync.NewCond(&g.workerMu)
 	for i := 0; i < workerCount; i++ {
@@ -260,7 +272,27 @@ func (g *Game) ensureInteriorMask() {
 	}
 }
 
-func (g *Game) Update() error {
+func (g *Game) enableAutoWalk(duration time.Duration) {
+	g.autoWalk = true
+	g.autoWalkDeadline = time.Now().Add(duration)
+	if g.autoWalkRand == nil {
+		g.autoWalkRand = rand.New(rand.NewSource(time.Now().UnixNano() + 3))
+	}
+	g.autoWalkFrameCount = 0
+}
+
+func (g *Game) movementVector() (float64, float64) {
+	if g.autoWalk {
+		if time.Now().After(g.autoWalkDeadline) {
+			g.autoWalk = false
+			return 0, 0
+		}
+		return g.autoWalkVector()
+	}
+	return g.manualMovementVector()
+}
+
+func (g *Game) manualMovementVector() (float64, float64) {
 	dx, dy := 0.0, 0.0
 	if ebiten.IsKeyPressed(ebiten.KeyW) {
 		dy -= moveSpeed
@@ -278,6 +310,42 @@ func (g *Game) Update() error {
 		dx *= 0.7071
 		dy *= 0.7071
 	}
+	return dx, dy
+}
+
+func (g *Game) autoWalkVector() (float64, float64) {
+	if g.autoWalkRand == nil {
+		g.autoWalkRand = rand.New(rand.NewSource(time.Now().UnixNano() + 4))
+	}
+	for attempts := 0; attempts < 5; attempts++ {
+		if g.autoWalkFrameCount <= 0 {
+			g.randomizeAutoWalkDirection()
+		}
+		nextX := g.ex + g.autoWalkDirX*moveSpeed
+		nextY := g.ey + g.autoWalkDirY*moveSpeed
+		if nextX > float64(emitterRad) && nextX < float64(w-emitterRad-1) &&
+			nextY > float64(emitterRad) && nextY < float64(h-emitterRad-1) &&
+			!g.isWall(int(nextX), int(nextY)) {
+			g.autoWalkFrameCount--
+			return g.autoWalkDirX * moveSpeed, g.autoWalkDirY * moveSpeed
+		}
+		g.autoWalkFrameCount = 0
+	}
+	return 0, 0
+}
+
+func (g *Game) randomizeAutoWalkDirection() {
+	if g.autoWalkRand == nil {
+		g.autoWalkRand = rand.New(rand.NewSource(time.Now().UnixNano() + 5))
+	}
+	angle := g.autoWalkRand.Float64() * 2 * math.Pi
+	g.autoWalkDirX = math.Cos(angle)
+	g.autoWalkDirY = math.Sin(angle)
+	g.autoWalkFrameCount = 20 + g.autoWalkRand.Intn(50)
+}
+
+func (g *Game) Update() error {
+	dx, dy := g.movementVector()
 	oldX, oldY := g.ex, g.ey
 	g.ex = math.Max(emitterRad, math.Min(float64(w-emitterRad-1), g.ex+dx))
 	g.ey = math.Max(emitterRad, math.Min(float64(h-emitterRad-1), g.ey+dy))
@@ -547,10 +615,50 @@ func drawLine(screen *ebiten.Image, x0, y0, x1, y1 int, clr color.Color) {
 	}
 }
 
+func startDefaultPGORecording(path string) (func(), error) {
+	f, err := os.Create(path)
+	if err != nil {
+		return nil, err
+	}
+	if err := pprof.StartCPUProfile(f); err != nil {
+		f.Close()
+		return nil, err
+	}
+	var once sync.Once
+	stop := func() {
+		once.Do(func() {
+			pprof.StopCPUProfile()
+			_ = f.Close()
+		})
+	}
+	return stop, nil
+}
+
 func main() {
 	flag.Parse()
 	runtime.GOMAXPROCS(runtime.NumCPU())
+
+	var stopProfile func()
+	if *recordDefaultPGO {
+		var err error
+		stopProfile, err = startDefaultPGORecording("default.pgo")
+		if err != nil {
+			log.Fatalf("unable to start PGO recording: %v", err)
+		}
+		defer stopProfile()
+	}
+
 	g := newGame()
+	if *recordDefaultPGO {
+		g.enableAutoWalk(pgoRecordDuration)
+		go func(stop func()) {
+			timer := time.NewTimer(pgoRecordDuration)
+			<-timer.C
+			stop()
+			log.Printf("default.pgo captured after %s; exiting", pgoRecordDuration)
+			os.Exit(0)
+		}(stopProfile)
+	}
 
 	ebiten.SetWindowSize(w*windowScale, h*windowScale)
 	ebiten.SetWindowTitle("Acoustic Steps")
