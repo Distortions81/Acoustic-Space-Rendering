@@ -13,7 +13,7 @@ import (
 )
 
 const (
-	w, h                  = 512, 512
+	w, h                  = 1024, 1024
 	windowScale           = 2
 	damp                  = 0.995
 	speed                 = 0.5
@@ -36,73 +36,7 @@ const (
 
 var showWallsFlag = flag.Bool("show-walls", false, "render wall geometry overlays")
 
-type half uint16
-
-func float32ToHalf(v float32) half {
-	bits := math.Float32bits(v)
-	sign := (bits >> 16) & 0x8000
-	exp := int32((bits>>23)&0xFF) - 127 + 15
-	mant := bits & 0x7FFFFF
-
-	switch {
-	case exp <= 0:
-		if exp < -10 {
-			return half(sign)
-		}
-		mant |= 0x800000
-		shift := uint32(1 - exp)
-		mant16 := mant >> (shift + 13)
-		if (mant>>(shift+12))&1 == 1 {
-			mant16++
-		}
-		return half(sign | mant16)
-	case exp >= 0x1F:
-		return half(sign | 0x7C00)
-	default:
-		mant16 := mant >> 13
-		if mant&0x1FFF > 0x1000 || (mant&0x1FFF == 0x1000 && mant16&1 == 1) {
-			mant16++
-			if mant16 == 0x0400 {
-				mant16 = 0
-				exp++
-				if exp == 0x1F {
-					return half(sign | 0x7C00)
-				}
-			}
-		}
-		return half(sign | uint32(exp)<<10 | mant16)
-	}
-}
-
-func halfToFloat32(h half) float32 {
-	bits := uint16(h)
-	sign := uint32(bits&0x8000) << 16
-	exp := (bits >> 10) & 0x1F
-	mant := uint32(bits & 0x3FF)
-
-	switch exp {
-	case 0:
-		if mant == 0 {
-			return math.Float32frombits(sign)
-		}
-		exp = 1
-		for mant&0x400 == 0 {
-			mant <<= 1
-			exp--
-		}
-		mant &= 0x3FF
-		fbits := sign | ((uint32(exp - 15 + 127)) << 23) | (mant << 13)
-		return math.Float32frombits(fbits)
-	case 0x1F:
-		fbits := sign | 0x7F800000 | (mant << 13)
-		return math.Float32frombits(fbits)
-	default:
-		fbits := sign | ((uint32(exp - 15 + 127)) << 23) | (mant << 13)
-		return math.Float32frombits(fbits)
-	}
-}
-
-type wavePlane [][]half
+type wavePlane [][]float32
 
 type waveField struct {
 	width, height int
@@ -123,13 +57,13 @@ func newWaveField(width, height int) *waveField {
 func makePlane(width, height int) wavePlane {
 	p := make(wavePlane, height)
 	for y := range p {
-		p[y] = make([]half, width)
+		p[y] = make([]float32, width)
 	}
 	return p
 }
 
 func (f *waveField) setCurr(x, y int, value float32) {
-	f.curr[y][x] = float32ToHalf(value)
+	f.curr[y][x] = value
 }
 
 func (f *waveField) zeroCell(x, y int) {
@@ -139,7 +73,7 @@ func (f *waveField) zeroCell(x, y int) {
 }
 
 func (f *waveField) readCurr(x, y int) float32 {
-	return halfToFloat32(f.curr[y][x])
+	return f.curr[y][x]
 }
 
 func (f *waveField) swap() {
@@ -151,16 +85,16 @@ func (f *waveField) zeroBoundaries() {
 	lastCol := f.width - 1
 	reflect := float32(boundaryReflect)
 	for x := 0; x < f.width; x++ {
-		top := halfToFloat32(f.next[1][x])
-		bottom := halfToFloat32(f.next[lastRow-1][x])
-		f.next[0][x] = float32ToHalf(-top * reflect)
-		f.next[lastRow][x] = float32ToHalf(-bottom * reflect)
+		top := f.next[1][x]
+		bottom := f.next[lastRow-1][x]
+		f.next[0][x] = -top * reflect
+		f.next[lastRow][x] = -bottom * reflect
 	}
 	for y := 1; y < lastRow; y++ {
-		left := halfToFloat32(f.next[y][1])
-		right := halfToFloat32(f.next[y][lastCol-1])
-		f.next[y][0] = float32ToHalf(-left * reflect)
-		f.next[y][lastCol] = float32ToHalf(-right * reflect)
+		left := f.next[y][1]
+		right := f.next[y][lastCol-1]
+		f.next[y][0] = -left * reflect
+		f.next[y][lastCol] = -right * reflect
 	}
 }
 
@@ -231,15 +165,13 @@ func processMask(field *waveField, mask *workerMask, cache *rowCache) {
 			lap := cache.center[x-1] + cache.center[x+1] + cache.top[x] + cache.bottom[x] - 4*cache.center[x]
 			val := (2*cache.center[x] - cache.prev[x]) + waveSpeed32*lap
 			val *= waveDamp32
-			nextRow[x] = float32ToHalf(val)
+			nextRow[x] = val
 		}
 	}
 }
 
-func convertRow(src []half, dst []float32) {
-	for i := range src {
-		dst[i] = halfToFloat32(src[i])
-	}
+func convertRow(src []float32, dst []float32) {
+	copy(dst, src)
 }
 
 func assignRowMasks(workerCount int, rows []rowMask) []workerMask {
