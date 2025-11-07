@@ -15,9 +15,9 @@ import (
 )
 
 const (
-	w, h                   = 768, 768
-	windowScale            = 2
-	damp                   = 0.9995
+	w, h                   = 512, 512
+	windowScale            = 3
+	damp                   = 0.999
 	speed                  = 0.5
 	waveDamp32             = float32(damp)
 	waveSpeed32            = float32(speed)
@@ -25,8 +25,8 @@ const (
 	moveSpeed              = 2
 	stepDelay              = 15
 	sampleRate             = 44100
-	defaultTPS             = 60.0
-	simStepsPerSecond      = defaultTPS * 10
+	defaultTPS             = 15.0
+	simStepsPerSecond      = defaultTPS * 50
 	audioTicksPerSecond    = simStepsPerSecond
 	controlDownsampleSteps = 6
 	earOffsetCells         = 5
@@ -36,6 +36,12 @@ const (
 	ampSmoothing           = 0.15
 	pressureMix            = 0.08
 	gradientMix            = 0.04
+	detailProbeRadius      = 18
+	detailProbeCount       = 48
+	detailPhaseVelocity    = 0.8
+	detailMix              = 0.22
+	detailHighpass         = 0.18
+	boundaryReflect        = 0.5
 	maxAudioLatencySec     = 0.2
 	minAudioBufferChunk    = 4096
 	minNoiseFloor          = 0.02
@@ -44,7 +50,7 @@ const (
 	audioChannels          = 2
 	audioBytesPerSample    = 2
 	audioFrameBytes        = audioChannels * audioBytesPerSample
-	wallSegments           = 22
+	wallSegments           = 3
 	wallMinLen             = 12
 	wallMaxLen             = 42
 	wallExclusionRadius    = 12
@@ -181,13 +187,18 @@ func (f *waveField) swap() {
 func (f *waveField) zeroBoundaries() {
 	lastRow := f.height - 1
 	lastCol := f.width - 1
+	reflect := float32(boundaryReflect)
 	for x := 0; x < f.width; x++ {
-		f.next[0][x] = 0
-		f.next[lastRow][x] = 0
+		top := halfToFloat32(f.next[1][x])
+		bottom := halfToFloat32(f.next[lastRow-1][x])
+		f.next[0][x] = float32ToHalf(-top * reflect)
+		f.next[lastRow][x] = float32ToHalf(-bottom * reflect)
 	}
 	for y := 1; y < lastRow; y++ {
-		f.next[y][0] = 0
-		f.next[y][lastCol] = 0
+		left := halfToFloat32(f.next[y][1])
+		right := halfToFloat32(f.next[y][lastCol-1])
+		f.next[y][0] = float32ToHalf(-left * reflect)
+		f.next[y][lastCol] = float32ToHalf(-right * reflect)
 	}
 }
 
@@ -322,6 +333,9 @@ type Game struct {
 	controlRightGradientSum float64
 	ampOnlyLeftState        float32
 	ampOnlyRightState       float32
+	detailTaps              []float32
+	detailPhase             float64
+	detailAvg               float32
 }
 
 func newGame(stream *WaveStream, amplitudeOnly bool) *Game {
@@ -346,6 +360,7 @@ func newGame(stream *WaveStream, amplitudeOnly bool) *Game {
 		sampleAccumulator: 0,
 		listenerForwardX:  0,
 		listenerForwardY:  -1,
+		detailTaps:        make([]float32, detailProbeCount),
 	}
 	for i := 0; i < workerCount; i++ {
 		go runWaveWorker(g.workerJobs, g.field.width)
@@ -617,10 +632,12 @@ func (g *Game) stepWave(cx, cy int, stepDuration float64) {
 		g.updateBandEnergies(avgEnergy)
 		g.leftEarPosX, g.leftEarPosY = leftX, leftY
 		g.rightEarPosX, g.rightEarPosY = rightX, rightY
+		g.captureDetailSnapshot(cx, cy)
 		g.accumulateControlSample(center, left, right, stepDuration)
 	} else {
 		zero := earSnapshot{}
 		g.updateBandEnergies(0)
+		g.zeroDetailSnapshot()
 		g.accumulateControlSample(zero, zero, zero, stepDuration)
 	}
 }
@@ -674,6 +691,80 @@ func (g *Game) samplePressureEnergy(cx, cy int) earSnapshot {
 		energy:   float32(energy / float64(count)),
 		gradient: gradMag,
 	}
+}
+
+func (g *Game) captureDetailSnapshot(cx, cy int) {
+	if len(g.detailTaps) != detailProbeCount {
+		g.detailTaps = make([]float32, detailProbeCount)
+	}
+	radius := float64(detailProbeRadius)
+	for i := 0; i < detailProbeCount; i++ {
+		angle := (2 * math.Pi * float64(i)) / float64(detailProbeCount)
+		sx := float64(cx) + math.Cos(angle)*radius
+		sy := float64(cy) + math.Sin(angle)*radius
+		g.detailTaps[i] = g.sampleFieldInterpolated(sx, sy)
+	}
+}
+
+func (g *Game) zeroDetailSnapshot() {
+	for i := range g.detailTaps {
+		g.detailTaps[i] = 0
+	}
+	g.detailAvg = 0
+}
+
+func (g *Game) sampleFieldInterpolated(fx, fy float64) float32 {
+	if fx <= 1 || fx >= float64(w-1) || fy <= 1 || fy >= float64(h-1) {
+		return 0
+	}
+	x0 := int(math.Floor(fx))
+	y0 := int(math.Floor(fy))
+	x1 := x0 + 1
+	y1 := y0 + 1
+	dx := float32(fx - float64(x0))
+	dy := float32(fy - float64(y0))
+	v00 := g.readFieldIfFree(x0, y0)
+	v10 := g.readFieldIfFree(x1, y0)
+	v01 := g.readFieldIfFree(x0, y1)
+	v11 := g.readFieldIfFree(x1, y1)
+	v0 := v00*(1-dx) + v10*dx
+	v1 := v01*(1-dx) + v11*dx
+	return v0*(1-dy) + v1*dy
+}
+
+func (g *Game) readFieldIfFree(x, y int) float32 {
+	if x < 0 || x >= w || y < 0 || y >= h {
+		return 0
+	}
+	if g.isWall(x, y) {
+		return 0
+	}
+	return g.field.readCurr(x, y)
+}
+
+func (g *Game) nextDetailValue(mod float32) float32 {
+	taps := g.detailTaps
+	if len(taps) == 0 {
+		return 0
+	}
+	advance := detailPhaseVelocity + float64(mod)*0.1
+	if advance < 0.2 {
+		advance = 0.2
+	}
+	g.detailPhase += advance
+	length := float64(len(taps))
+	for g.detailPhase >= length {
+		g.detailPhase -= length
+	}
+	for g.detailPhase < 0 {
+		g.detailPhase += length
+	}
+	idx := int(g.detailPhase)
+	nextIdx := (idx + 1) % len(taps)
+	frac := float32(g.detailPhase - float64(idx))
+	sample := taps[idx]*(1-frac) + taps[nextIdx]*frac
+	g.detailAvg += (sample - g.detailAvg) * detailHighpass
+	return (sample - g.detailAvg) * detailMix
 }
 
 func (g *Game) updateBandEnergies(localEnergy float32) {
@@ -846,9 +937,10 @@ func (g *Game) produceAudioChunk(frames int, center, left, right earSnapshot) {
 			leftState += (leftTarget - leftState) * ampOnlyRampSmooth
 			rightState += (rightTarget - rightState) * ampOnlyRampSmooth
 			grain := (g.noiseRand.Float32()*2 - 1) * ampOnlyNoiseMix
+			detail := g.nextDetailValue(avgGradient)
 			idx := i * audioChannels
-			noise[idx] = clampSample(leftState + grain*leftPan)
-			noise[idx+1] = clampSample(rightState + grain*rightPan)
+			noise[idx] = clampSample(leftState + grain*leftPan + detail*leftPan)
+			noise[idx+1] = clampSample(rightState + grain*rightPan + detail*rightPan)
 		}
 		g.ampOnlyLeftState = leftState
 		g.ampOnlyRightState = rightState
@@ -871,8 +963,9 @@ func (g *Game) produceAudioChunk(frames int, center, left, right earSnapshot) {
 		high := white - g.brightState
 		bed := low*lowBase + mid*midBase + high*highBase
 		centerPressure := center.pressure * (pressureMix * 0.5)
-		leftSample := bed*leftPan + left.pressure*pressureMix + centerPressure + (left.gradient+center.gradient*0.5)*gradientMix
-		rightSample := bed*rightPan + right.pressure*pressureMix + centerPressure + (right.gradient+center.gradient*0.5)*gradientMix
+		detail := g.nextDetailValue(avgGradient)
+		leftSample := bed*leftPan + left.pressure*pressureMix + centerPressure + (left.gradient+center.gradient*0.5)*gradientMix + detail*leftPan
+		rightSample := bed*rightPan + right.pressure*pressureMix + centerPressure + (right.gradient+center.gradient*0.5)*gradientMix + detail*rightPan
 		idx := i * audioChannels
 		noise[idx] = clampSample(leftSample)
 		noise[idx+1] = clampSample(rightSample)
