@@ -15,46 +15,55 @@ import (
 )
 
 const (
-	w, h                  = 256, 256
-	damp                  = 0.9998
-	speed                 = 0.5
-	waveDamp32            = float32(damp)
-	waveSpeed32           = float32(speed)
-	emitterRad            = 3
-	moveSpeed             = 2
-	stepDelay             = 15
-	sampleRate            = 44100
-	defaultTPS            = 60.0
-	simStepsPerSecond     = defaultTPS * 100
-	audioTicksPerSecond   = simStepsPerSecond
-	brownStep             = 0.02
-	pinkSmoothing         = 0.05
-	brightSmoothing       = 0.2
-	ampSmoothing          = 0.15
-	pressureMix           = 0.08
-	gradientMix           = 0.04
-	maxAudioLatencySec    = 0.2
-	minAudioBufferChunk   = 4096
-	minNoiseFloor         = 0.02
-	minSamplesPerPush     = 128
-	maxSamplesPerPush     = 2048
-	audioChannels         = 2
-	audioBytesPerSample   = 2
-	audioFrameBytes       = audioChannels * audioBytesPerSample
-	wallSegments          = 22
-	wallMinLen            = 12
-	wallMaxLen            = 42
-	wallExclusionRadius   = 12
-	wallThicknessVariance = 2
+	w, h                   = 256, 256
+	damp                   = 0.9998
+	speed                  = 0.5
+	waveDamp32             = float32(damp)
+	waveSpeed32            = float32(speed)
+	emitterRad             = 3
+	moveSpeed              = 2
+	stepDelay              = 15
+	sampleRate             = 44100
+	defaultTPS             = 60.0
+	simStepsPerSecond      = defaultTPS * 100
+	audioTicksPerSecond    = simStepsPerSecond
+	controlDownsampleSteps = 6
+	earOffsetCells         = 5
+	brownStep              = 0.02
+	pinkSmoothing          = 0.05
+	brightSmoothing        = 0.2
+	ampSmoothing           = 0.15
+	pressureMix            = 0.08
+	gradientMix            = 0.04
+	maxAudioLatencySec     = 0.2
+	minAudioBufferChunk    = 4096
+	minNoiseFloor          = 0.02
+	minSamplesPerPush      = 128
+	maxSamplesPerPush      = 2048
+	audioChannels          = 2
+	audioBytesPerSample    = 2
+	audioFrameBytes        = audioChannels * audioBytesPerSample
+	wallSegments           = 22
+	wallMinLen             = 12
+	wallMaxLen             = 42
+	wallExclusionRadius    = 12
+	wallThicknessVariance  = 2
+	lowBandSmoothing       = 0.01
+	midBandSmoothing       = 0.04
+	highBandSmoothing      = 0.12
+	bandResponseSmoothing  = 0.2
+	bandWeightFloor        = 0.0001
 )
 
-var amplitudeOnlyFlag = flag.Bool("amplitude-only", true, "output direct wave amplitude instead of noise texture")
+var amplitudeOnlyFlag = flag.Bool("am", true, "output direct wave amplitude instead of noise texture")
 
 var maxAudioSamples = int(float64(sampleRate) * maxAudioLatencySec)
 
 func init() {
 	if maxAudioSamples < minAudioBufferChunk {
 		maxAudioSamples = minAudioBufferChunk
+		listenerForwardX: 0,
+		listenerForwardY: -1,
 	}
 }
 
@@ -287,6 +296,29 @@ type Game struct {
 	workerCount        int
 	workerMasks        []workerMask
 	maskDirty          bool
+	controlPressureSum float64
+	controlEnergySum   float64
+	controlGradientSum float64
+	controlDurationSum float64
+	controlSamples     int
+	lowEnergyEnv       float32
+	midEnergyEnv       float32
+	highEnergyEnv      float32
+	bandLowEnergy      float32
+	bandMidEnergy      float32
+	bandHighEnergy     float32
+	listenerForwardX   float64
+	listenerForwardY   float64
+	leftEarPosX        int
+	leftEarPosY        int
+	rightEarPosX       int
+	rightEarPosY       int
+	controlLeftPressureSum   float64
+	controlLeftEnergySum     float64
+	controlLeftGradientSum   float64
+	controlRightPressureSum  float64
+	controlRightEnergySum    float64
+	controlRightGradientSum  float64
 }
 
 func newGame(stream *WaveStream, amplitudeOnly bool) *Game {
@@ -374,6 +406,11 @@ func (g *Game) Update() error {
 
 	moving := dx != 0 || dy != 0
 	if moving {
+		length := math.Hypot(dx, dy)
+		if length > 0 {
+			g.listenerForwardX = dx / length
+			g.listenerForwardY = dy / length
+		}
 		g.stepTimer++
 		if g.stepTimer >= stepDelay {
 			g.stepTimer = 0
@@ -424,6 +461,7 @@ func (g *Game) Update() error {
 	for i := 0; i < steps; i++ {
 		g.stepWave(cx, cy, stepDuration)
 	}
+	g.flushControlAccumulator(true)
 	g.physicsAccumulator -= float64(steps)
 
 	return nil
@@ -521,9 +559,11 @@ func (g *Game) stepWave(cx, cy int, stepDuration float64) {
 
 	if cx >= 1 && cx < w-1 && cy >= 1 && cy < h-1 {
 		pressure, energy, gradient := g.samplePressureEnergy(cx, cy)
-		g.pushAudioSample(pressure, energy, gradient, stepDuration)
+		g.updateBandEnergies(energy)
+		g.accumulateControlSample(pressure, energy, gradient, stepDuration)
 	} else {
-		g.pushAudioSample(0, 0, 0, stepDuration)
+		g.updateBandEnergies(0)
+		g.accumulateControlSample(0, 0, 0, stepDuration)
 	}
 }
 
@@ -532,12 +572,12 @@ func (g *Game) samplePressureEnergy(cx, cy int) (float32, float32, float32) {
 	var energy float64
 	var gx, gy float64
 	count := 0
-	for oy := -1; oy <= 1; oy++ {
+	for oy := -2; oy <= 2; oy++ {
 		y := cy + oy
 		if y < 1 || y >= h-1 {
 			continue
 		}
-		for ox := -1; ox <= 1; ox++ {
+		for ox := -2; ox <= 2; ox++ {
 			x := cx + ox
 			if x < 1 || x >= w-1 {
 				continue
@@ -568,6 +608,72 @@ func (g *Game) samplePressureEnergy(cx, cy int) (float32, float32, float32) {
 	return sum / float32(count), float32(energy / float64(count)), gradMag
 }
 
+func (g *Game) updateBandEnergies(localEnergy float32) {
+	if localEnergy < 0 {
+		localEnergy = -localEnergy
+	}
+	g.lowEnergyEnv += (localEnergy - g.lowEnergyEnv) * lowBandSmoothing
+	g.midEnergyEnv += (localEnergy - g.midEnergyEnv) * midBandSmoothing
+	g.highEnergyEnv += (localEnergy - g.highEnergyEnv) * highBandSmoothing
+
+	lowBand := g.lowEnergyEnv
+	midBand := g.midEnergyEnv - g.lowEnergyEnv
+	highBand := g.highEnergyEnv - g.midEnergyEnv
+	if midBand < 0 {
+		midBand = 0
+	}
+	if highBand < 0 {
+		highBand = 0
+	}
+
+	g.bandLowEnergy += (lowBand - g.bandLowEnergy) * bandResponseSmoothing
+	g.bandMidEnergy += (midBand - g.bandMidEnergy) * bandResponseSmoothing
+	g.bandHighEnergy += (highBand - g.bandHighEnergy) * bandResponseSmoothing
+}
+
+func (g *Game) accumulateControlSample(pressure, energy, gradient float32, stepDuration float64) {
+	g.controlPressureSum += float64(pressure)
+	g.controlEnergySum += float64(energy)
+	g.controlGradientSum += float64(gradient)
+	g.controlDurationSum += stepDuration
+	g.controlSamples++
+	g.flushControlAccumulator(false)
+}
+
+func (g *Game) flushControlAccumulator(force bool) {
+	if g.controlSamples == 0 {
+		return
+	}
+	if !force && g.controlSamples < controlDownsampleSteps {
+		return
+	}
+	scale := 1.0 / float64(g.controlSamples)
+	avgPressure := float32(g.controlPressureSum * scale)
+	avgEnergy := float32(g.controlEnergySum * scale)
+	avgGradient := float32(g.controlGradientSum * scale)
+	duration := g.controlDurationSum
+
+	g.controlPressureSum = 0
+	g.controlEnergySum = 0
+	g.controlGradientSum = 0
+	g.controlDurationSum = 0
+	g.controlSamples = 0
+
+	if duration <= 0 {
+		duration = float64(controlDownsampleSteps) / simStepsPerSecond
+	}
+	g.pushAudioSample(avgPressure, avgEnergy, avgGradient, duration)
+}
+
+func (g *Game) bandMixWeights() (float32, float32, float32) {
+	total := g.bandLowEnergy + g.bandMidEnergy + g.bandHighEnergy
+	if total < bandWeightFloor {
+		return 0.55, 0.3, 0.15
+	}
+	invTotal := float32(1.0 / total)
+	return g.bandLowEnergy * invTotal, g.bandMidEnergy * invTotal, g.bandHighEnergy * invTotal
+}
+
 func (g *Game) pushAudioSample(pressure, energy, gradient float32, stepDuration float64) {
 	g.sampleAccumulator += stepDuration * sampleRate
 	for {
@@ -589,11 +695,25 @@ func (g *Game) produceAudioChunk(samples int, pressure, energy, gradient float32
 	g.audioAmp += (targetAmp - g.audioAmp) * ampSmoothing
 	noise := g.ensureNoiseBuffer(samples)
 	gradientAmt := float32(math.Min(1, float64(gradient)*4))
-	lowBase := g.audioAmp * 0.55
-	midBase := g.audioAmp * 0.35
-	highBase := g.audioAmp*0.1 + gradientAmt*0.25
+	lowWeight, midWeight, highWeight := g.bandMixWeights()
+	lowShape := 0.55 * (0.6 + 0.8*lowWeight)
+	midShape := 0.35 * (0.6 + 0.8*midWeight)
+	highShape := 0.1 * (0.7 + 1.3*highWeight)
+	shapeSum := lowShape + midShape + highShape
+	var lowBase, midBase, highBase float32
+	if shapeSum > 0 {
+		scale := g.audioAmp / float32(shapeSum)
+		lowBase = float32(lowShape) * scale
+		midBase = float32(midShape) * scale
+		highBase = float32(highShape)*scale + gradientAmt*0.25
+	} else {
+		lowBase = g.audioAmp * 0.55
+		midBase = g.audioAmp * 0.35
+		highBase = g.audioAmp*0.1 + gradientAmt*0.25
+	}
 	if g.amplitudeOnly {
-		gain := g.audioAmp*4 + 0.05
+		totalBandEnergy := g.bandLowEnergy + g.bandMidEnergy + g.bandHighEnergy
+		gain := g.audioAmp*4 + 0.05 + totalBandEnergy*0.5
 		baseSample := pressure*gain + gradientAmt*gradientMix
 		if baseSample > 1 {
 			baseSample = 1
