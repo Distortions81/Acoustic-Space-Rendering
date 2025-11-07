@@ -4,22 +4,26 @@ import (
 	"image/color"
 	"io"
 	"math"
+	"math/rand"
 	"runtime"
 	"sync"
+	"time"
 
 	"github.com/hajimehoshi/ebiten/v2"
 	"github.com/hajimehoshi/ebiten/v2/audio"
 )
 
 const (
-	w, h       = 256, 256
-	damp       = 0.996
-	speed      = 0.3
-	emitterRad = 3
-	moveSpeed  = 2
-	stepDelay  = 15
-	sampleRate = 44100
-	defaultTPS = 60.0
+	w, h         = 256, 256
+	damp         = 0.996
+	speed        = 0.5
+	emitterRad   = 3
+	moveSpeed    = 2
+	stepDelay    = 15
+	sampleRate   = 44100
+	defaultTPS   = 60.0
+	brownStep    = 0.02
+	ampSmoothing = 0.15
 )
 
 type Game struct {
@@ -28,6 +32,9 @@ type Game struct {
 	stepTimer         int
 	audioStream       *WaveStream
 	sampleAccumulator float64
+	noiseRand         *rand.Rand
+	brownState        float32
+	audioAmp          float32
 }
 
 func (g *Game) Update() error {
@@ -119,7 +126,23 @@ func (g *Game) pushAudioSample(v float32) {
 	if samples <= 0 {
 		return
 	}
-	g.audioStream.PushRepeated(v, samples)
+	// Scale brown noise amplitude by local wave magnitude and smooth changes.
+	targetAmp := float32(math.Min(1, math.Abs(float64(v))*4))
+	g.audioAmp += (targetAmp - g.audioAmp) * ampSmoothing
+	if g.audioAmp < 0.0001 {
+		return
+	}
+	noise := make([]float32, samples)
+	for i := 0; i < samples; i++ {
+		g.brownState += (g.noiseRand.Float32()*2 - 1) * brownStep
+		if g.brownState > 1 {
+			g.brownState = 1
+		} else if g.brownState < -1 {
+			g.brownState = -1
+		}
+		noise[i] = g.brownState * g.audioAmp
+	}
+	g.audioStream.PushSamples(noise)
 	g.sampleAccumulator -= float64(samples)
 }
 
@@ -156,22 +179,16 @@ type WaveStream struct {
 	lastSample float32
 }
 
-func (s *WaveStream) Push(v float32) {
-	s.PushRepeated(v, 1)
-}
-
-func (s *WaveStream) PushRepeated(v float32, count int) {
-	if count <= 0 {
+func (s *WaveStream) PushSamples(samples []float32) {
+	if len(samples) == 0 {
 		return
 	}
 	s.mutex.Lock()
-	for i := 0; i < count; i++ {
-		s.buf = append(s.buf, v)
-	}
+	s.buf = append(s.buf, samples...)
 	if len(s.buf) > sampleRate {
 		s.buf = s.buf[len(s.buf)-sampleRate:] // keep last second
 	}
-	s.lastSample = v
+	s.lastSample = s.buf[len(s.buf)-1]
 	s.mutex.Unlock()
 }
 
@@ -236,6 +253,7 @@ func main() {
 		ex:          float64(w / 2),
 		ey:          float64(h / 2),
 		audioStream: stream,
+		noiseRand:   rand.New(rand.NewSource(time.Now().UnixNano())),
 	}
 
 	ebiten.SetWindowSize(w*2, h*2)
