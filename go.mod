@@ -10,6 +10,7 @@ require (
 	github.com/ebitengine/oto/v3 v3.4.0 // indirect
 	github.com/ebitengine/purego v0.9.0 // indirect
 	github.com/jezek/xgb v1.1.1 // indirect
+	github.com/jgillich/go-opencl v0.0.0-20180608191952-a0efba3e5257 // indirect
 	golang.org/x/sync v0.17.0 // indirect
 	golang.org/x/sys v0.36.0 // indirect
 )

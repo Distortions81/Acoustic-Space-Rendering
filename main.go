@@ -15,7 +15,8 @@ import (
 )
 
 const (
-	w, h                   = 256, 256
+	w, h                   = 768, 768
+	windowScale            = 2
 	damp                   = 0.9995
 	speed                  = 0.5
 	waveDamp32             = float32(damp)
@@ -25,7 +26,7 @@ const (
 	stepDelay              = 15
 	sampleRate             = 44100
 	defaultTPS             = 60.0
-	simStepsPerSecond      = defaultTPS * 100
+	simStepsPerSecond      = defaultTPS * 10
 	audioTicksPerSecond    = simStepsPerSecond
 	controlDownsampleSteps = 6
 	earOffsetCells         = 5
@@ -1065,7 +1066,7 @@ func main() {
 
 	g := newGame(stream, *amplitudeOnlyFlag)
 
-	ebiten.SetWindowSize(w*2, h*2)
+	ebiten.SetWindowSize(w*windowScale, h*windowScale)
 	ebiten.SetWindowTitle("Acoustic Steps with Live Sound")
 	if err := ebiten.RunGame(g); err != nil {
 		panic(err)
