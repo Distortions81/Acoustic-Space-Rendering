@@ -1,6 +1,7 @@
 package main
 
 import (
+	"flag"
 	"image/color"
 	"io"
 	"math"
@@ -14,25 +15,38 @@ import (
 )
 
 const (
-	w, h                = 256, 256
-	damp                = 0.996
-	speed               = 0.5
-	emitterRad          = 3
-	moveSpeed           = 2
-	stepDelay           = 15
-	sampleRate          = 44100
-	defaultTPS          = 60.0
-	simStepsPerSecond   = defaultTPS * 10
-	brownStep           = 0.02
-	pinkSmoothing       = 0.05
-	brightSmoothing     = 0.2
-	ampSmoothing        = 0.15
-	pressureMix         = 0.08
-	gradientMix         = 0.04
-	maxAudioLatencySec  = 0.5
-	minAudioBufferChunk = 44
-	minNoiseFloor       = 0.02
+	w, h                  = 256, 256
+	damp                  = 0.9995
+	speed                 = 0.5
+	emitterRad            = 3
+	moveSpeed             = 2
+	stepDelay             = 15
+	sampleRate            = 44100
+	defaultTPS            = 60.0
+	simStepsPerSecond     = defaultTPS * 100
+	audioTicksPerSecond   = 960.0
+	brownStep             = 0.02
+	pinkSmoothing         = 0.05
+	brightSmoothing       = 0.2
+	ampSmoothing          = 0.15
+	pressureMix           = 0.08
+	gradientMix           = 0.04
+	maxAudioLatencySec    = 0.2
+	minAudioBufferChunk   = 4096
+	minNoiseFloor         = 0.02
+	minSamplesPerPush     = 128
+	maxSamplesPerPush     = 2048
+	audioChannels         = 2
+	audioBytesPerSample   = 2
+	audioFrameBytes       = audioChannels * audioBytesPerSample
+	wallSegments          = 22
+	wallMinLen            = 12
+	wallMaxLen            = 42
+	wallExclusionRadius   = 12
+	wallThicknessVariance = 2
 )
+
+var amplitudeOnlyFlag = flag.Bool("amplitude-only", true, "output direct wave amplitude instead of noise texture")
 
 var maxAudioSamples = int(float64(sampleRate) * maxAudioLatencySec)
 
@@ -56,6 +70,9 @@ type Game struct {
 	physicsAccumulator float64
 	noiseBuf           []float32
 	lastAudioTime      time.Time
+	walls              []bool
+	levelRand          *rand.Rand
+	amplitudeOnly      bool
 }
 
 func (g *Game) Update() error {
@@ -76,8 +93,12 @@ func (g *Game) Update() error {
 		dx *= 0.7071
 		dy *= 0.7071
 	}
+	oldX, oldY := g.ex, g.ey
 	g.ex = math.Max(emitterRad, math.Min(float64(w-emitterRad-1), g.ex+dx))
 	g.ey = math.Max(emitterRad, math.Min(float64(h-emitterRad-1), g.ey+dy))
+	if g.isWall(int(g.ex), int(g.ey)) {
+		g.ex, g.ey = oldX, oldY
+	}
 
 	moving := dx != 0 || dy != 0
 	if moving {
@@ -90,6 +111,9 @@ func (g *Game) Update() error {
 						cx := int(g.ex) + x
 						cy := int(g.ey) + y
 						if cx <= 0 || cx >= w-1 || cy <= 0 || cy >= h-1 {
+							continue
+						}
+						if g.isWall(cx, cy) {
 							continue
 						}
 						g.curr[cy*w+cx] = 1.0
@@ -133,7 +157,86 @@ func (g *Game) Update() error {
 	return nil
 }
 
+func (g *Game) generateWalls() {
+	if len(g.walls) != w*h {
+		g.walls = make([]bool, w*h)
+	} else {
+		for i := range g.walls {
+			g.walls[i] = false
+		}
+	}
+	if g.levelRand == nil {
+		g.levelRand = rand.New(rand.NewSource(time.Now().UnixNano() + 1))
+	}
+	for s := 0; s < wallSegments; s++ {
+		lengthRange := wallMaxLen - wallMinLen + 1
+		if lengthRange <= 0 {
+			lengthRange = 1
+		}
+		length := wallMinLen + g.levelRand.Intn(lengthRange)
+		thickness := 1
+		if wallThicknessVariance > 0 {
+			thickness += g.levelRand.Intn(wallThicknessVariance + 1)
+		}
+		horizontal := g.levelRand.Intn(2) == 0
+		x := g.levelRand.Intn(w-4) + 2
+		y := g.levelRand.Intn(h-4) + 2
+		dx, dy := 0, 1
+		if horizontal {
+			dx, dy = 1, 0
+		}
+		perpX, perpY := dy, dx
+		cx, cy := x, y
+		for l := 0; l < length; l++ {
+			if cx <= 1 || cx >= w-1 || cy <= 1 || cy >= h-1 {
+				break
+			}
+			for t := -thickness; t <= thickness; t++ {
+				tx := cx + perpX*t
+				ty := cy + perpY*t
+				g.trySetWall(tx, ty)
+			}
+			cx += dx
+			cy += dy
+		}
+	}
+}
+
+func (g *Game) trySetWall(x, y int) {
+	if x <= 1 || x >= w-1 || y <= 1 || y >= h-1 {
+		return
+	}
+	dist := math.Hypot(float64(x)-g.ex, float64(y)-g.ey)
+	if dist < float64(wallExclusionRadius) {
+		return
+	}
+	idx := y*w + x
+	g.walls[idx] = true
+	g.curr[idx] = 0
+	g.prev[idx] = 0
+	g.next[idx] = 0
+}
+
+func (g *Game) isWall(x, y int) bool {
+	if x < 0 || x >= w || y < 0 || y >= h {
+		return true
+	}
+	if len(g.walls) == 0 {
+		return false
+	}
+	return g.walls[y*w+x]
+}
+
 func (g *Game) stepWave(cx, cy int, stepDuration float64) {
+	hasWalls := len(g.walls) > 0
+	if hasWalls {
+		for idx, wall := range g.walls {
+			if wall {
+				g.curr[idx] = 0
+				g.prev[idx] = 0
+			}
+		}
+	}
 	numCPU := runtime.NumCPU()
 	rowsPer := (h + numCPU - 1) / numCPU
 	var wg sync.WaitGroup
@@ -155,6 +258,10 @@ func (g *Game) stepWave(cx, cy int, stepDuration float64) {
 				}
 				for x := 1; x < w-1; x++ {
 					i := y*w + x
+					if hasWalls && g.walls[i] {
+						g.next[i] = 0
+						continue
+					}
 					lap := g.curr[i-1] + g.curr[i+1] + g.curr[i-w] + g.curr[i+w] - 4*g.curr[i]
 					g.next[i] = (2*g.curr[i] - g.prev[i]) + float32(speed)*lap
 					g.next[i] *= damp
@@ -188,15 +295,22 @@ func (g *Game) samplePressureEnergy(cx, cy int) (float32, float32, float32) {
 			if x < 1 || x >= w-1 {
 				continue
 			}
+			if g.isWall(x, y) {
+				continue
+			}
 			v := g.curr[y*w+x]
 			sum += v
 			energy += math.Abs(float64(v))
 			count++
 			if x > 0 && x < w-1 {
-				gx += float64(g.curr[y*w+x+1] - g.curr[y*w+x-1])
+				if !g.isWall(x+1, y) && !g.isWall(x-1, y) {
+					gx += float64(g.curr[y*w+x+1] - g.curr[y*w+x-1])
+				}
 			}
 			if y > 0 && y < h-1 {
-				gy += float64(g.curr[(y+1)*w+x] - g.curr[(y-1)*w+x])
+				if !g.isWall(x, y+1) && !g.isWall(x, y-1) {
+					gy += float64(g.curr[(y+1)*w+x] - g.curr[(y-1)*w+x])
+				}
 			}
 		}
 	}
@@ -209,10 +323,20 @@ func (g *Game) samplePressureEnergy(cx, cy int) (float32, float32, float32) {
 
 func (g *Game) pushAudioSample(pressure, energy, gradient float32, stepDuration float64) {
 	g.sampleAccumulator += stepDuration * sampleRate
-	samples := int(g.sampleAccumulator)
-	if samples <= 0 {
-		return
+	for {
+		samples := int(g.sampleAccumulator)
+		if samples < minSamplesPerPush {
+			break
+		}
+		if samples > maxSamplesPerPush {
+			samples = maxSamplesPerPush
+		}
+		g.produceAudioChunk(samples, pressure, energy, gradient)
+		g.sampleAccumulator -= float64(samples)
 	}
+}
+
+func (g *Game) produceAudioChunk(samples int, pressure, energy, gradient float32) {
 	// Scale noise amplitude by local energy plus gradient cue and smooth changes.
 	targetAmp := float32(math.Min(1, math.Max(float64(energy)*3+float64(gradient)*2, float64(minNoiseFloor))))
 	g.audioAmp += (targetAmp - g.audioAmp) * ampSmoothing
@@ -221,6 +345,20 @@ func (g *Game) pushAudioSample(pressure, energy, gradient float32, stepDuration 
 	lowBase := g.audioAmp * 0.55
 	midBase := g.audioAmp * 0.35
 	highBase := g.audioAmp*0.1 + gradientAmt*0.25
+	if g.amplitudeOnly {
+		gain := g.audioAmp*4 + 0.05
+		baseSample := pressure*gain + gradientAmt*gradientMix
+		if baseSample > 1 {
+			baseSample = 1
+		} else if baseSample < -1 {
+			baseSample = -1
+		}
+		for i := 0; i < samples; i++ {
+			noise[i] = baseSample
+		}
+		g.audioStream.PushSamples(noise)
+		return
+	}
 
 	for i := 0; i < samples; i++ {
 		white := g.noiseRand.Float32()*2 - 1
@@ -246,7 +384,6 @@ func (g *Game) pushAudioSample(pressure, energy, gradient float32, stepDuration 
 		noise[i] = sample
 	}
 	g.audioStream.PushSamples(noise)
-	g.sampleAccumulator -= float64(samples)
 }
 
 func (g *Game) ensureNoiseBuffer(n int) []float32 {
@@ -260,6 +397,13 @@ func (g *Game) ensureNoiseBuffer(n int) []float32 {
 func (g *Game) Draw(screen *ebiten.Image) {
 	img := make([]byte, w*h*4)
 	for i := 0; i < w*h; i++ {
+		if len(g.walls) > 0 && g.walls[i] {
+			img[i*4] = 30
+			img[i*4+1] = 40
+			img[i*4+2] = 80
+			img[i*4+3] = 255
+			continue
+		}
 		v := g.curr[i]
 		v = float32(math.Max(-1, math.Min(1, float64(v))))
 		intensity := byte(math.Abs(float64(v)) * 255)
@@ -287,7 +431,14 @@ func (g *Game) Layout(_, _ int) (int, int) { return w, h }
 type WaveStream struct {
 	buf        []float32
 	mutex      sync.Mutex
+	cond       *sync.Cond
 	lastSample float32
+}
+
+func NewWaveStream() *WaveStream {
+	ws := &WaveStream{}
+	ws.cond = sync.NewCond(&ws.mutex)
+	return ws
 }
 
 func (s *WaveStream) PushSamples(samples []float32) {
@@ -300,41 +451,39 @@ func (s *WaveStream) PushSamples(samples []float32) {
 		s.buf = s.buf[len(s.buf)-maxAudioSamples:] // keep most recent window
 	}
 	s.lastSample = s.buf[len(s.buf)-1]
+	s.cond.Broadcast()
 	s.mutex.Unlock()
 }
 
 func (s *WaveStream) Read(p []byte) (int, error) {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
-	n := len(p) / 4 // stereo 16-bit
-	if n == 0 {
+	frameCount := len(p) / audioFrameBytes
+	if frameCount == 0 {
 		return 0, nil
 	}
-	readable := len(s.buf)
-	for i := 0; i < n; i++ {
-		var sampleValue float32
-		if i < readable {
-			sampleValue = s.buf[i]
-		} else {
-			sampleValue = s.lastSample
-		}
+	for len(s.buf) == 0 {
+		s.cond.Wait()
+	}
+	if frameCount > len(s.buf) {
+		frameCount = len(s.buf)
+	}
+	for i := 0; i < frameCount; i++ {
+		sampleValue := s.buf[i]
 		s.lastSample = sampleValue
 		sample := int16(sampleValue * 20000)
-		p[4*i] = byte(sample)
-		p[4*i+1] = byte(sample >> 8)
-		p[4*i+2] = p[4*i]
-		p[4*i+3] = p[4*i+1]
+		for ch := 0; ch < audioChannels; ch++ {
+			base := i*audioFrameBytes + ch*audioBytesPerSample
+			p[base] = byte(sample)
+			p[base+1] = byte(sample >> 8)
+		}
 	}
-	consumed := n
-	if consumed > readable {
-		consumed = readable
-	}
-	if consumed < len(s.buf) {
-		s.buf = s.buf[consumed:]
+	if frameCount < len(s.buf) {
+		s.buf = s.buf[frameCount:]
 	} else {
 		s.buf = s.buf[:0]
 	}
-	return len(p), nil
+	return frameCount * audioFrameBytes, nil
 }
 
 func (s *WaveStream) Close() error { return nil }
@@ -351,21 +500,26 @@ func (s *WaveStream) Seek(offset int64, whence int) (int64, error) {
 }
 
 func main() {
+	flag.Parse()
 	runtime.GOMAXPROCS(runtime.NumCPU())
 	audioCtx := audio.NewContext(sampleRate)
-	stream := &WaveStream{}
+	stream := NewWaveStream()
 	player, _ := audioCtx.NewPlayer(stream)
 	player.Play()
 
 	g := &Game{
-		curr:        make([]float32, w*h),
-		prev:        make([]float32, w*h),
-		next:        make([]float32, w*h),
-		ex:          float64(w / 2),
-		ey:          float64(h / 2),
-		audioStream: stream,
-		noiseRand:   rand.New(rand.NewSource(time.Now().UnixNano())),
+		curr:          make([]float32, w*h),
+		prev:          make([]float32, w*h),
+		next:          make([]float32, w*h),
+		ex:            float64(w / 2),
+		ey:            float64(h / 2),
+		audioStream:   stream,
+		noiseRand:     rand.New(rand.NewSource(time.Now().UnixNano())),
+		levelRand:     rand.New(rand.NewSource(time.Now().UnixNano() + 1)),
+		walls:         make([]bool, w*h),
+		amplitudeOnly: *amplitudeOnlyFlag,
 	}
+	g.generateWalls()
 
 	ebiten.SetWindowSize(w*2, h*2)
 	ebiten.SetWindowTitle("Acoustic Steps with Live Sound")
