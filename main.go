@@ -15,9 +15,9 @@ import (
 )
 
 const (
-	w, h                   = 512, 512
-	windowScale            = 3
-	damp                   = 0.999
+	w, h                   = 1024, 1024
+	windowScale            = 1
+	damp                   = 0.997
 	speed                  = 0.5
 	waveDamp32             = float32(damp)
 	waveSpeed32            = float32(speed)
@@ -26,31 +26,37 @@ const (
 	stepDelay              = 15
 	sampleRate             = 44100
 	defaultTPS             = 15.0
-	simStepsPerSecond      = defaultTPS * 50
+	simStepsPerSecond      = defaultTPS * 10
 	audioTicksPerSecond    = simStepsPerSecond
-	controlDownsampleSteps = 6
+	controlDownsampleSteps = 1
 	earOffsetCells         = 5
 	brownStep              = 0.02
 	pinkSmoothing          = 0.05
 	brightSmoothing        = 0.2
-	ampSmoothing           = 0.15
-	pressureMix            = 0.08
-	gradientMix            = 0.04
+	ampSmoothing           = 0.01
+	pressureMix            = 0.5
+	gradientMix            = 0.5
 	detailProbeRadius      = 18
 	detailProbeCount       = 48
 	detailPhaseVelocity    = 0.8
-	detailMix              = 0.22
-	detailHighpass         = 0.18
-	boundaryReflect        = 0.5
-	maxAudioLatencySec     = 0.2
+	detailMix              = 0.5
+	detailHighpass         = 0.24
+	boundaryReflect        = 0.99
+	wavefrontAmpBoost      = 4.5
+	centerDirectMix        = 0.12
+	surroundMix            = 0.45
+	surroundTapWidth       = 4
+	surroundTapFalloff     = 0.65
+	stepImpulseStrength    = 10
+	maxAudioLatencySec     = 0.1
 	minAudioBufferChunk    = 4096
-	minNoiseFloor          = 0.02
+	minNoiseFloor          = 0.01
 	minSamplesPerPush      = 128
 	maxSamplesPerPush      = 2048
 	audioChannels          = 2
 	audioBytesPerSample    = 2
 	audioFrameBytes        = audioChannels * audioBytesPerSample
-	wallSegments           = 3
+	wallSegments           = 50
 	wallMinLen             = 12
 	wallMaxLen             = 42
 	wallExclusionRadius    = 12
@@ -61,10 +67,19 @@ const (
 	bandResponseSmoothing  = 0.2
 	bandWeightFloor        = 0.0001
 	ampOnlyRampSmooth      = 0.35
-	ampOnlyNoiseMix        = 0.015
+	ampOnlyNoiseMix        = 0.008
+	compressorThreshold    = 0.05
+	compressorRatio        = 10.0
+	compressorAttack       = 0.001
+	compressorRelease      = 0.001
+	compressorGainSmooth   = 0.35
+	compressorFloor        = 0.001
 )
 
-var amplitudeOnlyFlag = flag.Bool("amplitude-only", true, "output direct wave amplitude instead of noise texture")
+var (
+	amplitudeOnlyFlag = flag.Bool("amplitude-only", true, "output direct wave amplitude instead of noise texture")
+	showWallsFlag     = flag.Bool("show-walls", false, "render wall geometry overlays")
+)
 
 var maxAudioSamples = int(float64(sampleRate) * maxAudioLatencySec)
 
@@ -336,6 +351,10 @@ type Game struct {
 	detailTaps              []float32
 	detailPhase             float64
 	detailAvg               float32
+	compressorEnv           float32
+	compressorGain          float32
+	surroundLeft            float32
+	surroundRight           float32
 }
 
 func newGame(stream *WaveStream, amplitudeOnly bool) *Game {
@@ -361,6 +380,9 @@ func newGame(stream *WaveStream, amplitudeOnly bool) *Game {
 		listenerForwardX:  0,
 		listenerForwardY:  -1,
 		detailTaps:        make([]float32, detailProbeCount),
+		compressorGain:    1,
+		surroundLeft:      0,
+		surroundRight:     0,
 	}
 	for i := 0; i < workerCount; i++ {
 		go runWaveWorker(g.workerJobs, g.field.width)
@@ -445,7 +467,7 @@ func (g *Game) Update() error {
 						if g.isWall(cx, cy) {
 							continue
 						}
-						g.field.setCurr(cx, cy, 1.0)
+						g.field.setCurr(cx, cy, stepImpulseStrength)
 					}
 				}
 			}
@@ -633,11 +655,13 @@ func (g *Game) stepWave(cx, cy int, stepDuration float64) {
 		g.leftEarPosX, g.leftEarPosY = leftX, leftY
 		g.rightEarPosX, g.rightEarPosY = rightX, rightY
 		g.captureDetailSnapshot(cx, cy)
+		g.updateSurroundDirections()
 		g.accumulateControlSample(center, left, right, stepDuration)
 	} else {
 		zero := earSnapshot{}
 		g.updateBandEnergies(0)
 		g.zeroDetailSnapshot()
+		g.surroundLeft, g.surroundRight = 0, 0
 		g.accumulateControlSample(zero, zero, zero, stepDuration)
 	}
 }
@@ -767,6 +791,60 @@ func (g *Game) nextDetailValue(mod float32) float32 {
 	return (sample - g.detailAvg) * detailMix
 }
 
+func (g *Game) updateSurroundDirections() {
+	taps := g.detailTaps
+	if len(taps) == 0 {
+		g.surroundLeft, g.surroundRight = 0, 0
+		return
+	}
+	fx, fy := g.listenerForwardX, g.listenerForwardY
+	if fx == 0 && fy == 0 {
+		fy = -1
+	}
+	baseAngle := math.Atan2(fy, fx)
+	g.surroundLeft = g.detailDirectionalSample(baseAngle + math.Pi/2)
+	g.surroundRight = g.detailDirectionalSample(baseAngle - math.Pi/2)
+}
+
+func (g *Game) detailDirectionalSample(theta float64) float32 {
+	taps := g.detailTaps
+	if len(taps) == 0 {
+		return 0
+	}
+	twoPi := math.Pi * 2
+	theta = math.Mod(theta, twoPi)
+	if theta < 0 {
+		theta += twoPi
+	}
+	pos := theta / twoPi * float64(len(taps))
+	base := int(math.Floor(pos))
+	frac := pos - float64(base)
+	width := surroundTapWidth
+	var num float64
+	var den float64
+	for offset := -width; offset <= width; offset++ {
+		idx := (base + offset) % len(taps)
+		if idx < 0 {
+			idx += len(taps)
+		}
+		weight := math.Pow(surroundTapFalloff, math.Abs(float64(offset)))
+		if offset == 0 {
+			interp := taps[idx]
+			nextIdx := (idx + 1) % len(taps)
+			nextVal := taps[nextIdx]
+			interp = interp*(1-float32(frac)) + nextVal*float32(frac)
+			num += float64(interp) * weight
+		} else {
+			num += float64(taps[idx]) * weight
+		}
+		den += weight
+	}
+	if den == 0 {
+		return 0
+	}
+	return float32(num / den)
+}
+
 func (g *Game) updateBandEnergies(localEnergy float32) {
 	if localEnergy < 0 {
 		localEnergy = -localEnergy
@@ -882,6 +960,32 @@ func clampSample(v float32) float32 {
 	return v
 }
 
+func (g *Game) compressorGainFor(level float32) float32 {
+	if level < 0 {
+		level = -level
+	}
+	coeff := float32(compressorRelease)
+	if level > g.compressorEnv {
+		coeff = float32(compressorAttack)
+	}
+	g.compressorEnv += (level - g.compressorEnv) * coeff
+	env := g.compressorEnv
+	desired := float32(1)
+	if env > compressorThreshold && env > 0 {
+		over := env - float32(compressorThreshold)
+		target := float32(compressorThreshold) + over/float32(compressorRatio)
+		if target <= 0 {
+			target = compressorThreshold
+		}
+		desired = target / env
+	}
+	if desired < float32(compressorFloor) {
+		desired = float32(compressorFloor)
+	}
+	g.compressorGain += (desired - g.compressorGain) * float32(compressorGainSmooth)
+	return g.compressorGain
+}
+
 func (g *Game) pushAudioSample(center, left, right earSnapshot, stepDuration float64) {
 	g.sampleAccumulator += stepDuration * sampleRate
 	for {
@@ -900,10 +1004,10 @@ func (g *Game) pushAudioSample(center, left, right earSnapshot, stepDuration flo
 func (g *Game) produceAudioChunk(frames int, center, left, right earSnapshot) {
 	avgEnergy := (center.energy + left.energy + right.energy) / 3
 	avgGradient := (center.gradient + left.gradient + right.gradient) / 3
-	targetAmp := float32(math.Min(1, math.Max(float64(avgEnergy)*3+float64(avgGradient)*2, float64(minNoiseFloor))))
+	targetAmp := float32(math.Min(1, math.Max(float64(avgEnergy)*3+float64(avgGradient)*wavefrontAmpBoost, float64(minNoiseFloor))))
 	g.audioAmp += (targetAmp - g.audioAmp) * ampSmoothing
 	noise := g.ensureAudioBuffer(frames)
-	gradientAmt := float32(math.Min(1, float64(avgGradient)*4))
+	gradientAmt := float32(math.Min(1, float64(avgGradient)*6))
 	lowWeight, midWeight, highWeight := g.bandMixWeights()
 	lowShape := 0.55 * (0.6 + 0.8*lowWeight)
 	midShape := 0.35 * (0.6 + 0.8*midWeight)
@@ -925,8 +1029,8 @@ func (g *Game) produceAudioChunk(frames int, center, left, right earSnapshot) {
 	if g.amplitudeOnly {
 		totalBandEnergy := g.bandLowEnergy + g.bandMidEnergy + g.bandHighEnergy
 		gain := g.audioAmp*4 + 0.05 + totalBandEnergy*0.5
-		leftBase := (center.pressure*0.3 + left.pressure*0.7) * gain
-		rightBase := (center.pressure*0.3 + right.pressure*0.7) * gain
+		leftBase := (center.pressure*centerDirectMix + left.pressure*0.7 + g.surroundLeft*surroundMix) * gain
+		rightBase := (center.pressure*centerDirectMix + right.pressure*0.7 + g.surroundRight*surroundMix) * gain
 		leftGrad := (left.gradient + center.gradient*0.5) * gradientMix
 		rightGrad := (right.gradient + center.gradient*0.5) * gradientMix
 		leftTarget := clampSample(leftBase + leftGrad)
@@ -938,9 +1042,13 @@ func (g *Game) produceAudioChunk(frames int, center, left, right earSnapshot) {
 			rightState += (rightTarget - rightState) * ampOnlyRampSmooth
 			grain := (g.noiseRand.Float32()*2 - 1) * ampOnlyNoiseMix
 			detail := g.nextDetailValue(avgGradient)
+			leftSample := leftState + grain*leftPan + detail*leftPan
+			rightSample := rightState + grain*rightPan + detail*rightPan
+			maxAbs := float32(math.Max(math.Abs(float64(leftSample)), math.Abs(float64(rightSample))))
+			compGain := g.compressorGainFor(maxAbs)
 			idx := i * audioChannels
-			noise[idx] = clampSample(leftState + grain*leftPan + detail*leftPan)
-			noise[idx+1] = clampSample(rightState + grain*rightPan + detail*rightPan)
+			noise[idx] = clampSample(leftSample * compGain)
+			noise[idx+1] = clampSample(rightSample * compGain)
 		}
 		g.ampOnlyLeftState = leftState
 		g.ampOnlyRightState = rightState
@@ -962,13 +1070,15 @@ func (g *Game) produceAudioChunk(frames int, center, left, right earSnapshot) {
 		mid := g.pinkState
 		high := white - g.brightState
 		bed := low*lowBase + mid*midBase + high*highBase
-		centerPressure := center.pressure * (pressureMix * 0.5)
+		centerPressure := center.pressure * (pressureMix * centerDirectMix)
 		detail := g.nextDetailValue(avgGradient)
-		leftSample := bed*leftPan + left.pressure*pressureMix + centerPressure + (left.gradient+center.gradient*0.5)*gradientMix + detail*leftPan
-		rightSample := bed*rightPan + right.pressure*pressureMix + centerPressure + (right.gradient+center.gradient*0.5)*gradientMix + detail*rightPan
+		leftSample := bed*leftPan + left.pressure*pressureMix + centerPressure + (left.gradient+center.gradient*0.5)*gradientMix + detail*leftPan + g.surroundLeft*surroundMix
+		rightSample := bed*rightPan + right.pressure*pressureMix + centerPressure + (right.gradient+center.gradient*0.5)*gradientMix + detail*rightPan + g.surroundRight*surroundMix
+		maxAbs := float32(math.Max(math.Abs(float64(leftSample)), math.Abs(float64(rightSample))))
+		compGain := g.compressorGainFor(maxAbs)
 		idx := i * audioChannels
-		noise[idx] = clampSample(leftSample)
-		noise[idx+1] = clampSample(rightSample)
+		noise[idx] = clampSample(leftSample * compGain)
+		noise[idx+1] = clampSample(rightSample * compGain)
 	}
 	g.audioStream.PushSamples(noise)
 }
@@ -984,8 +1094,9 @@ func (g *Game) ensureAudioBuffer(frames int) []float32 {
 
 func (g *Game) Draw(screen *ebiten.Image) {
 	img := make([]byte, w*h*4)
+	showWalls := *showWallsFlag
 	for i := 0; i < w*h; i++ {
-		if len(g.walls) > 0 && g.walls[i] {
+		if showWalls && len(g.walls) > 0 && g.walls[i] {
 			img[i*4] = 30
 			img[i*4+1] = 40
 			img[i*4+2] = 80
