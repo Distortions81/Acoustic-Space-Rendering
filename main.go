@@ -22,11 +22,11 @@ const (
 	stepDelay           = 15
 	sampleRate          = 44100
 	defaultTPS          = 60.0
-	simStepsPerSecond   = defaultTPS * 8
+	simStepsPerSecond   = defaultTPS * 4
 	brownStep           = 0.02
 	ampSmoothing        = 0.15
 	maxAudioLatencySec  = 0.5
-	minAudioBufferChunk = 1024
+	minAudioBufferChunk = 44
 	minNoiseFloor       = 0.02
 )
 
