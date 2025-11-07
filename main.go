@@ -14,27 +14,29 @@ import (
 )
 
 const (
-	w, h         = 256, 256
-	damp         = 0.996
-	speed        = 0.5
-	emitterRad   = 3
-	moveSpeed    = 2
-	stepDelay    = 15
-	sampleRate   = 44100
-	defaultTPS   = 60.0
-	brownStep    = 0.02
-	ampSmoothing = 0.15
+	w, h              = 256, 256
+	damp              = 0.996
+	speed             = 0.5
+	emitterRad        = 3
+	moveSpeed         = 2
+	stepDelay         = 15
+	sampleRate        = 44100
+	defaultTPS        = 60.0
+	simStepsPerSecond = 240.0
+	brownStep         = 0.02
+	ampSmoothing      = 0.15
 )
 
 type Game struct {
-	curr, prev, next  []float32
-	ex, ey            float64
-	stepTimer         int
-	audioStream       *WaveStream
-	sampleAccumulator float64
-	noiseRand         *rand.Rand
-	brownState        float32
-	audioAmp          float32
+	curr, prev, next   []float32
+	ex, ey             float64
+	stepTimer          int
+	audioStream        *WaveStream
+	sampleAccumulator  float64
+	noiseRand          *rand.Rand
+	brownState         float32
+	audioAmp           float32
+	physicsAccumulator float64
 }
 
 func (g *Game) Update() error {
@@ -68,6 +70,9 @@ func (g *Game) Update() error {
 					if x*x+y*y <= emitterRad*emitterRad {
 						cx := int(g.ex) + x
 						cy := int(g.ey) + y
+						if cx <= 0 || cx >= w-1 || cy <= 0 || cy >= h-1 {
+							continue
+						}
 						g.curr[cy*w+cx] = 1.0
 					}
 				}
@@ -77,14 +82,35 @@ func (g *Game) Update() error {
 		g.stepTimer = stepDelay
 	}
 
-	// Wave equation parallel update
+	cx, cy := int(g.ex), int(g.ey)
+	actualTPS := ebiten.ActualTPS()
+	if actualTPS < 1 {
+		actualTPS = defaultTPS
+	}
+	g.physicsAccumulator += simStepsPerSecond / actualTPS
+	steps := int(g.physicsAccumulator)
+	if steps < 1 {
+		steps = 1
+	}
+	for i := 0; i < steps; i++ {
+		g.stepWave(cx, cy)
+	}
+	g.physicsAccumulator -= float64(steps)
+
+	return nil
+}
+
+func (g *Game) stepWave(cx, cy int) {
 	numCPU := runtime.NumCPU()
+	rowsPer := (h + numCPU - 1) / numCPU
 	var wg sync.WaitGroup
-	rowsPer := h / numCPU
 	for i := 0; i < numCPU; i++ {
 		yStart := i * rowsPer
+		if yStart >= h {
+			break
+		}
 		yEnd := yStart + rowsPer
-		if i == numCPU-1 {
+		if yEnd > h {
 			yEnd = h
 		}
 		wg.Add(1)
@@ -106,22 +132,16 @@ func (g *Game) Update() error {
 	wg.Wait()
 	g.prev, g.curr, g.next = g.curr, g.next, g.prev
 
-	// Send one pressure sample to audio stream (upsampled to audio rate)
-	cx, cy := int(g.ex), int(g.ey)
 	if cx >= 1 && cx < w-1 && cy >= 1 && cy < h-1 {
 		v := (g.curr[cy*w+cx-1] + g.curr[cy*w+cx+1] + g.curr[(cy-1)*w+cx] + g.curr[(cy+1)*w+cx]) * 0.25
 		g.pushAudioSample(v)
+	} else {
+		g.pushAudioSample(0)
 	}
-
-	return nil
 }
 
 func (g *Game) pushAudioSample(v float32) {
-	targetTPS := ebiten.ActualTPS()
-	if targetTPS < 1 {
-		targetTPS = defaultTPS
-	}
-	g.sampleAccumulator += float64(sampleRate) / targetTPS
+	g.sampleAccumulator += float64(sampleRate) / simStepsPerSecond
 	samples := int(g.sampleAccumulator)
 	if samples <= 0 {
 		return
@@ -130,6 +150,9 @@ func (g *Game) pushAudioSample(v float32) {
 	targetAmp := float32(math.Min(1, math.Abs(float64(v))*4))
 	g.audioAmp += (targetAmp - g.audioAmp) * ampSmoothing
 	if g.audioAmp < 0.0001 {
+		silence := make([]float32, samples)
+		g.audioStream.PushSamples(silence)
+		g.sampleAccumulator -= float64(samples)
 		return
 	}
 	noise := make([]float32, samples)
