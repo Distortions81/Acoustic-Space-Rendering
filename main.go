@@ -22,9 +22,13 @@ const (
 	stepDelay           = 15
 	sampleRate          = 44100
 	defaultTPS          = 60.0
-	simStepsPerSecond   = defaultTPS * 4
+	simStepsPerSecond   = defaultTPS * 10
 	brownStep           = 0.02
+	pinkSmoothing       = 0.05
+	brightSmoothing     = 0.2
 	ampSmoothing        = 0.15
+	pressureMix         = 0.08
+	gradientMix         = 0.04
 	maxAudioLatencySec  = 0.5
 	minAudioBufferChunk = 44
 	minNoiseFloor       = 0.02
@@ -46,6 +50,8 @@ type Game struct {
 	sampleAccumulator  float64
 	noiseRand          *rand.Rand
 	brownState         float32
+	pinkState          float32
+	brightState        float32
 	audioAmp           float32
 	physicsAccumulator float64
 	noiseBuf           []float32
@@ -160,16 +166,17 @@ func (g *Game) stepWave(cx, cy int, stepDuration float64) {
 	g.prev, g.curr, g.next = g.curr, g.next, g.prev
 
 	if cx >= 1 && cx < w-1 && cy >= 1 && cy < h-1 {
-		pressure, energy := g.samplePressureEnergy(cx, cy)
-		g.pushAudioSample(pressure, energy, stepDuration)
+		pressure, energy, gradient := g.samplePressureEnergy(cx, cy)
+		g.pushAudioSample(pressure, energy, gradient, stepDuration)
 	} else {
-		g.pushAudioSample(0, 0, stepDuration)
+		g.pushAudioSample(0, 0, 0, stepDuration)
 	}
 }
 
-func (g *Game) samplePressureEnergy(cx, cy int) (float32, float32) {
+func (g *Game) samplePressureEnergy(cx, cy int) (float32, float32, float32) {
 	var sum float32
 	var energy float64
+	var gx, gy float64
 	count := 0
 	for oy := -1; oy <= 1; oy++ {
 		y := cy + oy
@@ -185,32 +192,52 @@ func (g *Game) samplePressureEnergy(cx, cy int) (float32, float32) {
 			sum += v
 			energy += math.Abs(float64(v))
 			count++
+			if x > 0 && x < w-1 {
+				gx += float64(g.curr[y*w+x+1] - g.curr[y*w+x-1])
+			}
+			if y > 0 && y < h-1 {
+				gy += float64(g.curr[(y+1)*w+x] - g.curr[(y-1)*w+x])
+			}
 		}
 	}
 	if count == 0 {
-		return 0, 0
+		return 0, 0, 0
 	}
-	return sum / float32(count), float32(energy / float64(count))
+	gradMag := float32(math.Sqrt(gx*gx+gy*gy) / float64(count))
+	return sum / float32(count), float32(energy / float64(count)), gradMag
 }
 
-func (g *Game) pushAudioSample(pressure, energy float32, stepDuration float64) {
+func (g *Game) pushAudioSample(pressure, energy, gradient float32, stepDuration float64) {
 	g.sampleAccumulator += stepDuration * sampleRate
 	samples := int(g.sampleAccumulator)
 	if samples <= 0 {
 		return
 	}
-	// Scale brown noise amplitude by local wave magnitude and smooth changes.
-	targetAmp := float32(math.Min(1, math.Max(float64(energy)*4, float64(minNoiseFloor))))
+	// Scale noise amplitude by local energy plus gradient cue and smooth changes.
+	targetAmp := float32(math.Min(1, math.Max(float64(energy)*3+float64(gradient)*2, float64(minNoiseFloor))))
 	g.audioAmp += (targetAmp - g.audioAmp) * ampSmoothing
 	noise := g.ensureNoiseBuffer(samples)
+	gradientAmt := float32(math.Min(1, float64(gradient)*4))
+	lowBase := g.audioAmp * 0.55
+	midBase := g.audioAmp * 0.35
+	highBase := g.audioAmp*0.1 + gradientAmt*0.25
+
 	for i := 0; i < samples; i++ {
-		g.brownState += (g.noiseRand.Float32()*2 - 1) * brownStep
+		white := g.noiseRand.Float32()*2 - 1
+		g.brownState += white * brownStep
 		if g.brownState > 1 {
 			g.brownState = 1
 		} else if g.brownState < -1 {
 			g.brownState = -1
 		}
-		sample := g.brownState*g.audioAmp + pressure*0.05
+		g.pinkState += (white - g.pinkState) * pinkSmoothing
+		g.brightState += (white - g.brightState) * brightSmoothing
+		low := g.brownState
+		mid := g.pinkState
+		high := white - g.brightState
+		sample := low*lowBase + mid*midBase + high*highBase
+		sample += pressure * pressureMix
+		sample += gradientAmt * gradientMix
 		if sample > 1 {
 			sample = 1
 		} else if sample < -1 {
