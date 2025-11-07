@@ -40,6 +40,27 @@ const (
 
 var showWallsFlag = flag.Bool("show-walls", false, "render wall geometry overlays")
 var recordDefaultPGO = flag.Bool("record-default-pgo", false, "walk randomly for 15s while capturing default.pgo")
+var occludeLineOfSightFlag = flag.Bool("occlude-line-of-sight", true, "hide regions that are not in the listener's line of sight when rendering")
+
+type intPoint struct {
+	x int
+	y int
+}
+
+var losPerimeterTargets = buildLOSPerimeterTargets()
+
+func buildLOSPerimeterTargets() []intPoint {
+	points := make([]intPoint, 0, 2*(w+h))
+	for x := 0; x < w; x++ {
+		points = append(points, intPoint{x: x, y: 0})
+		points = append(points, intPoint{x: x, y: h - 1})
+	}
+	for y := 1; y < h-1; y++ {
+		points = append(points, intPoint{x: 0, y: y})
+		points = append(points, intPoint{x: w - 1, y: y})
+	}
+	return points
+}
 
 type wavePlane [][]float32
 
@@ -214,6 +235,7 @@ type Game struct {
 	autoWalkDirX       float64
 	autoWalkDirY       float64
 	autoWalkFrameCount int
+	visibleMask        []bool
 }
 
 func newGame() *Game {
@@ -513,6 +535,57 @@ func clampCoord(v, min, max int) int {
 	return v
 }
 
+func (g *Game) refreshVisibleMask() {
+	if len(g.visibleMask) != w*h {
+		g.visibleMask = make([]bool, w*h)
+	}
+	for i := range g.visibleMask {
+		g.visibleMask[i] = false
+	}
+	cx := clampCoord(int(math.Round(g.ex)), 0, w-1)
+	cy := clampCoord(int(math.Round(g.ey)), 0, h-1)
+	g.visibleMask[cy*w+cx] = true
+	for _, target := range losPerimeterTargets {
+		g.castVisibilityRay(cx, cy, target.x, target.y)
+	}
+}
+
+func (g *Game) castVisibilityRay(x0, y0, x1, y1 int) {
+	dx := int(math.Abs(float64(x1 - x0)))
+	sx := -1
+	if x0 < x1 {
+		sx = 1
+	}
+	dy := -int(math.Abs(float64(y1 - y0)))
+	sy := -1
+	if y0 < y1 {
+		sy = 1
+	}
+	err := dx + dy
+	for {
+		if x0 < 0 || x0 >= w || y0 < 0 || y0 >= h {
+			break
+		}
+		idx := y0*w + x0
+		g.visibleMask[idx] = true
+		if g.isWall(x0, y0) && !(x0 == x1 && y0 == y1) {
+			break
+		}
+		if x0 == x1 && y0 == y1 {
+			break
+		}
+		e2 := 2 * err
+		if e2 >= dy {
+			err += dy
+			x0 += sx
+		}
+		if e2 <= dx {
+			err += dx
+			y0 += sy
+		}
+	}
+}
+
 func (g *Game) stepWave() {
 	g.ensureInteriorMask()
 	g.workerMu.Lock()
@@ -533,8 +606,19 @@ func (g *Game) Draw(screen *ebiten.Image) {
 	}
 	img := g.pixelBuf
 	showWalls := *showWallsFlag
+	occludeLOS := *occludeLineOfSightFlag
+	if occludeLOS {
+		g.refreshVisibleMask()
+	}
 	for i := 0; i < w*h; i++ {
 		base := i * 4
+		if occludeLOS && (len(g.visibleMask) == w*h) && !g.visibleMask[i] {
+			img[base] = 0
+			img[base+1] = 0
+			img[base+2] = 0
+			img[base+3] = 255
+			continue
+		}
 		if showWalls && len(g.walls) > 0 && g.walls[i] {
 			img[base] = 30
 			img[base+1] = 40
