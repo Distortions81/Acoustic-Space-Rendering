@@ -15,7 +15,7 @@ import (
 const (
 	w, h                  = 1024, 1024
 	windowScale           = 2
-	damp                  = 0.995
+	damp                  = 0.996
 	speed                 = 0.5
 	waveDamp32            = float32(damp)
 	waveSpeed32           = float32(speed)
@@ -23,14 +23,14 @@ const (
 	moveSpeed             = 2
 	stepDelay             = 15
 	defaultTPS            = 60.0
-	simStepsPerSecond     = defaultTPS * 4
+	simStepsPerSecond     = defaultTPS * 6
 	earOffsetCells        = 5
-	boundaryReflect       = 0.99
+	boundaryReflect       = 0.60
 	stepImpulseStrength   = 10
 	wallSegments          = 50
 	wallMinLen            = 12
-	wallMaxLen            = 42
-	wallExclusionRadius   = 12
+	wallMaxLen            = 100
+	wallExclusionRadius   = 1
 	wallThicknessVariance = 2
 )
 
