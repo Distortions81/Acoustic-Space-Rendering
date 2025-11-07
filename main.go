@@ -3,7 +3,6 @@ package main
 import (
 	"flag"
 	"image/color"
-	"io"
 	"math"
 	"math/rand"
 	"runtime"
@@ -11,84 +10,31 @@ import (
 	"time"
 
 	"github.com/hajimehoshi/ebiten/v2"
-	"github.com/hajimehoshi/ebiten/v2/audio"
 )
 
 const (
-	w, h                   = 1024, 1024
-	windowScale            = 2
-	damp                   = 0.997
-	speed                  = 0.5
-	waveDamp32             = float32(damp)
-	waveSpeed32            = float32(speed)
-	emitterRad             = 3
-	moveSpeed              = 2
-	stepDelay              = 15
-	sampleRate             = 44100
-	defaultTPS             = 15.0
-	simStepsPerSecond      = defaultTPS * 10
-	audioTicksPerSecond    = simStepsPerSecond
-	controlDownsampleSteps = 1
-	earOffsetCells         = 5
-	brownStep              = 0.02
-	pinkSmoothing          = 0.05
-	brightSmoothing        = 0.2
-	ampSmoothing           = 0.01
-	pressureMix            = 0.5
-	gradientMix            = 0.5
-	detailProbeRadius      = 18
-	detailProbeCount       = 48
-	detailPhaseVelocity    = 0.8
-	detailMix              = 0.5
-	detailHighpass         = 0.24
-	boundaryReflect        = 0.99
-	wavefrontAmpBoost      = 4.5
-	centerDirectMix        = 0.12
-	surroundMix            = 0.45
-	surroundTapWidth       = 4
-	surroundTapFalloff     = 0.65
-	stepImpulseStrength    = 10
-	maxAudioLatencySec     = 0.1
-	minAudioBufferChunk    = 4096
-	minNoiseFloor          = 0.01
-	minSamplesPerPush      = 128
-	maxSamplesPerPush      = 2048
-	audioChannels          = 2
-	audioBytesPerSample    = 2
-	audioFrameBytes        = audioChannels * audioBytesPerSample
-	wallSegments           = 50
-	wallMinLen             = 12
-	wallMaxLen             = 42
-	wallExclusionRadius    = 12
-	wallThicknessVariance  = 2
-	lowBandSmoothing       = 0.01
-	midBandSmoothing       = 0.04
-	highBandSmoothing      = 0.12
-	bandResponseSmoothing  = 0.2
-	bandWeightFloor        = 0.0001
-	ampOnlyRampSmooth      = 0.35
-	ampOnlyNoiseMix        = 0.008
-	compressorThreshold    = 0.05
-	compressorRatio        = 10.0
-	compressorAttack       = 0.001
-	compressorRelease      = 0.001
-	compressorGainSmooth   = 0.35
-	compressorFloor        = 0.001
+	w, h                  = 512, 512
+	windowScale           = 2
+	damp                  = 0.995
+	speed                 = 0.5
+	waveDamp32            = float32(damp)
+	waveSpeed32           = float32(speed)
+	emitterRad            = 3
+	moveSpeed             = 2
+	stepDelay             = 15
+	defaultTPS            = 60.0
+	simStepsPerSecond     = defaultTPS * 4
+	earOffsetCells        = 5
+	boundaryReflect       = 0.99
+	stepImpulseStrength   = 10
+	wallSegments          = 50
+	wallMinLen            = 12
+	wallMaxLen            = 42
+	wallExclusionRadius   = 12
+	wallThicknessVariance = 2
 )
 
-var (
-	amplitudeOnlyFlag = flag.Bool("amplitude-only", true, "output direct wave amplitude instead of noise texture")
-	showWallsFlag     = flag.Bool("show-walls", false, "render wall geometry overlays")
-	audioEnabledFlag  = flag.Bool("audio", false, "enable audio playback")
-)
-
-var maxAudioSamples = int(float64(sampleRate) * maxAudioLatencySec)
-
-func init() {
-	if maxAudioSamples < minAudioBufferChunk {
-		maxAudioSamples = minAudioBufferChunk
-	}
-}
+var showWallsFlag = flag.Bool("show-walls", false, "render wall geometry overlays")
 
 type half uint16
 
@@ -227,12 +173,6 @@ type workerMask struct {
 	rows []rowMask
 }
 
-type workerJob struct {
-	field *waveField
-	mask  *workerMask
-	wg    *sync.WaitGroup
-}
-
 type rowCache struct {
 	center []float32
 	prev   []float32
@@ -249,18 +189,29 @@ func newRowCache(width int) *rowCache {
 	}
 }
 
-func runWaveWorker(jobs <-chan workerJob, width int) {
-	cache := newRowCache(width)
-	for job := range jobs {
-		if job.mask == nil || len(job.mask.rows) == 0 {
-			if job.wg != nil {
-				job.wg.Done()
-			}
-			continue
+func (g *Game) waveWorkerLoop(index int) {
+	cache := newRowCache(g.field.width)
+	lastStep := 0
+	g.workerMu.Lock()
+	for {
+		for g.workerStep == lastStep {
+			g.workerCond.Wait()
 		}
-		processMask(job.field, job.mask, cache)
-		if job.wg != nil {
-			job.wg.Done()
+		lastStep = g.workerStep
+		var mask workerMask
+		if index < len(g.workerMasks) {
+			mask = g.workerMasks[index]
+		}
+		g.workerMu.Unlock()
+
+		if len(mask.rows) > 0 {
+			processMask(g.field, &mask, cache)
+		}
+
+		g.workerMu.Lock()
+		g.workerPending--
+		if g.workerPending == 0 {
+			g.workerCond.Broadcast()
 		}
 	}
 }
@@ -304,89 +255,44 @@ func assignRowMasks(workerCount int, rows []rowMask) []workerMask {
 }
 
 type Game struct {
-	field                   *waveField
-	ex, ey                  float64
-	stepTimer               int
-	audioStream             *WaveStream
-	sampleAccumulator       float64
-	noiseRand               *rand.Rand
-	brownState              float32
-	pinkState               float32
-	brightState             float32
-	audioAmp                float32
-	physicsAccumulator      float64
-	noiseBuf                []float32
-	lastAudioTime           time.Time
-	walls                   []bool
-	levelRand               *rand.Rand
-	amplitudeOnly           bool
-	workerJobs              chan workerJob
-	workerCount             int
-	workerMasks             []workerMask
-	maskDirty               bool
-	controlPressureSum      float64
-	controlEnergySum        float64
-	controlGradientSum      float64
-	controlDurationSum      float64
-	controlSamples          int
-	lowEnergyEnv            float32
-	midEnergyEnv            float32
-	highEnergyEnv           float32
-	bandLowEnergy           float32
-	bandMidEnergy           float32
-	bandHighEnergy          float32
-	listenerForwardX        float64
-	listenerForwardY        float64
-	leftEarPosX             int
-	leftEarPosY             int
-	rightEarPosX            int
-	rightEarPosY            int
-	controlLeftPressureSum  float64
-	controlLeftEnergySum    float64
-	controlLeftGradientSum  float64
-	controlRightPressureSum float64
-	controlRightEnergySum   float64
-	controlRightGradientSum float64
-	ampOnlyLeftState        float32
-	ampOnlyRightState       float32
-	detailTaps              []float32
-	detailPhase             float64
-	detailAvg               float32
-	compressorEnv           float32
-	compressorGain          float32
-	surroundLeft            float32
-	surroundRight           float32
+	field              *waveField
+	ex, ey             float64
+	stepTimer          int
+	physicsAccumulator float64
+	walls              []bool
+	levelRand          *rand.Rand
+	workerCount        int
+	workerMasks        []workerMask
+	maskDirty          bool
+	workerMu           sync.Mutex
+	workerCond         *sync.Cond
+	workerStep         int
+	workerPending      int
+	listenerForwardX   float64
+	listenerForwardY   float64
+	pixelBuf           []byte
 }
 
-func newGame(stream *WaveStream, amplitudeOnly bool) *Game {
+func newGame() *Game {
 	workerCount := runtime.NumCPU()
 	if workerCount < 1 {
 		workerCount = 1
 	}
 	g := &Game{
-		field:             newWaveField(w, h),
-		ex:                float64(w / 2),
-		ey:                float64(h / 2),
-		audioStream:       stream,
-		noiseRand:         rand.New(rand.NewSource(time.Now().UnixNano())),
-		levelRand:         rand.New(rand.NewSource(time.Now().UnixNano() + 1)),
-		walls:             make([]bool, w*h),
-		amplitudeOnly:     amplitudeOnly,
-		workerCount:       workerCount,
-		workerJobs:        make(chan workerJob, workerCount),
-		maskDirty:         true,
-		lastAudioTime:     time.Time{},
-		noiseBuf:          nil,
-		sampleAccumulator: 0,
-		listenerForwardX:  0,
-		listenerForwardY:  -1,
-		detailTaps:        make([]float32, detailProbeCount),
-		compressorGain:    1,
-		surroundLeft:      0,
-		surroundRight:     0,
+		field:            newWaveField(w, h),
+		ex:               float64(w / 2),
+		ey:               float64(h / 2),
+		levelRand:        rand.New(rand.NewSource(time.Now().UnixNano() + 1)),
+		walls:            make([]bool, w*h),
+		workerCount:      workerCount,
+		maskDirty:        true,
+		listenerForwardX: 0,
+		listenerForwardY: -1,
+		pixelBuf:         make([]byte, w*h*4),
 	}
+	g.workerCond = sync.NewCond(&g.workerMu)
 	for i := 0; i < workerCount; i++ {
-		go runWaveWorker(g.workerJobs, g.field.width)
+		go g.waveWorkerLoop(i)
 	}
 	g.generateWalls()
 	g.rebuildInteriorMask()
@@ -477,17 +383,6 @@ func (g *Game) Update() error {
 		g.stepTimer = stepDelay
 	}
 
-	cx, cy := int(g.ex), int(g.ey)
-	now := time.Now()
-	if g.lastAudioTime.IsZero() {
-		g.lastAudioTime = now
-	}
-	frameElapsed := now.Sub(g.lastAudioTime)
-	frameSeconds := frameElapsed.Seconds()
-	if frameSeconds <= 0 {
-		frameSeconds = 1.0 / simStepsPerSecond
-	}
-	g.lastAudioTime = now
 	actualTPS := ebiten.ActualTPS()
 	if actualTPS < 1 {
 		actualTPS = defaultTPS
@@ -497,14 +392,9 @@ func (g *Game) Update() error {
 	if steps < 1 {
 		steps = 1
 	}
-	stepDuration := frameSeconds / float64(steps)
-	if stepDuration <= 0 {
-		stepDuration = 1.0 / simStepsPerSecond
-	}
 	for i := 0; i < steps; i++ {
-		g.stepWave(cx, cy, stepDuration)
+		g.stepWave()
 	}
-	g.flushControlAccumulator(true)
 	g.physicsAccumulator -= float64(steps)
 
 	return nil
@@ -623,489 +513,33 @@ func clampCoord(v, min, max int) int {
 	return v
 }
 
-func (g *Game) stepWave(cx, cy int, stepDuration float64) {
+func (g *Game) stepWave() {
 	g.ensureInteriorMask()
-	var wg sync.WaitGroup
-	for i := range g.workerMasks {
-		mask := &g.workerMasks[i]
-		if len(mask.rows) == 0 {
-			continue
-		}
-		wg.Add(1)
-		g.workerJobs <- workerJob{
-			field: g.field,
-			mask:  mask,
-			wg:    &wg,
-		}
+	g.workerMu.Lock()
+	g.workerPending = g.workerCount
+	g.workerStep++
+	g.workerCond.Broadcast()
+	for g.workerPending > 0 {
+		g.workerCond.Wait()
 	}
-	wg.Wait()
+	g.workerMu.Unlock()
 	g.field.zeroBoundaries()
 	g.field.swap()
-
-	if cx >= 1 && cx < w-1 && cy >= 1 && cy < h-1 {
-		center := g.samplePressureEnergy(cx, cy)
-		ox, oy := g.earOffsets()
-		leftX := clampCoord(cx-ox, 1, w-2)
-		leftY := clampCoord(cy-oy, 1, h-2)
-		rightX := clampCoord(cx+ox, 1, w-2)
-		rightY := clampCoord(cy+oy, 1, h-2)
-		left := g.samplePressureEnergy(leftX, leftY)
-		right := g.samplePressureEnergy(rightX, rightY)
-		avgEnergy := (center.energy + left.energy + right.energy) / 3
-		g.updateBandEnergies(avgEnergy)
-		g.leftEarPosX, g.leftEarPosY = leftX, leftY
-		g.rightEarPosX, g.rightEarPosY = rightX, rightY
-		g.captureDetailSnapshot(cx, cy)
-		g.updateSurroundDirections()
-		g.accumulateControlSample(center, left, right, stepDuration)
-	} else {
-		zero := earSnapshot{}
-		g.updateBandEnergies(0)
-		g.zeroDetailSnapshot()
-		g.surroundLeft, g.surroundRight = 0, 0
-		g.accumulateControlSample(zero, zero, zero, stepDuration)
-	}
-}
-
-type earSnapshot struct {
-	pressure float32
-	energy   float32
-	gradient float32
-}
-
-func (g *Game) samplePressureEnergy(cx, cy int) earSnapshot {
-	var sum float32
-	var energy float64
-	var gx, gy float64
-	count := 0
-	for oy := -2; oy <= 2; oy++ {
-		y := cy + oy
-		if y < 1 || y >= h-1 {
-			continue
-		}
-		for ox := -2; ox <= 2; ox++ {
-			x := cx + ox
-			if x < 1 || x >= w-1 {
-				continue
-			}
-			if g.isWall(x, y) {
-				continue
-			}
-			v := g.field.readCurr(x, y)
-			sum += v
-			energy += math.Abs(float64(v))
-			count++
-			if x > 0 && x < w-1 {
-				if !g.isWall(x+1, y) && !g.isWall(x-1, y) {
-					gx += float64(g.field.readCurr(x+1, y) - g.field.readCurr(x-1, y))
-				}
-			}
-			if y > 0 && y < h-1 {
-				if !g.isWall(x, y+1) && !g.isWall(x, y-1) {
-					gy += float64(g.field.readCurr(x, y+1) - g.field.readCurr(x, y-1))
-				}
-			}
-		}
-	}
-	if count == 0 {
-		return earSnapshot{}
-	}
-	gradMag := float32(math.Sqrt(gx*gx+gy*gy) / float64(count))
-	return earSnapshot{
-		pressure: sum / float32(count),
-		energy:   float32(energy / float64(count)),
-		gradient: gradMag,
-	}
-}
-
-func (g *Game) captureDetailSnapshot(cx, cy int) {
-	if len(g.detailTaps) != detailProbeCount {
-		g.detailTaps = make([]float32, detailProbeCount)
-	}
-	radius := float64(detailProbeRadius)
-	for i := 0; i < detailProbeCount; i++ {
-		angle := (2 * math.Pi * float64(i)) / float64(detailProbeCount)
-		sx := float64(cx) + math.Cos(angle)*radius
-		sy := float64(cy) + math.Sin(angle)*radius
-		g.detailTaps[i] = g.sampleFieldInterpolated(sx, sy)
-	}
-}
-
-func (g *Game) zeroDetailSnapshot() {
-	for i := range g.detailTaps {
-		g.detailTaps[i] = 0
-	}
-	g.detailAvg = 0
-}
-
-func (g *Game) sampleFieldInterpolated(fx, fy float64) float32 {
-	if fx <= 1 || fx >= float64(w-1) || fy <= 1 || fy >= float64(h-1) {
-		return 0
-	}
-	x0 := int(math.Floor(fx))
-	y0 := int(math.Floor(fy))
-	x1 := x0 + 1
-	y1 := y0 + 1
-	dx := float32(fx - float64(x0))
-	dy := float32(fy - float64(y0))
-	v00 := g.readFieldIfFree(x0, y0)
-	v10 := g.readFieldIfFree(x1, y0)
-	v01 := g.readFieldIfFree(x0, y1)
-	v11 := g.readFieldIfFree(x1, y1)
-	v0 := v00*(1-dx) + v10*dx
-	v1 := v01*(1-dx) + v11*dx
-	return v0*(1-dy) + v1*dy
-}
-
-func (g *Game) readFieldIfFree(x, y int) float32 {
-	if x < 0 || x >= w || y < 0 || y >= h {
-		return 0
-	}
-	if g.isWall(x, y) {
-		return 0
-	}
-	return g.field.readCurr(x, y)
-}
-
-func (g *Game) nextDetailValue(mod float32) float32 {
-	taps := g.detailTaps
-	if len(taps) == 0 {
-		return 0
-	}
-	advance := detailPhaseVelocity + float64(mod)*0.1
-	if advance < 0.2 {
-		advance = 0.2
-	}
-	g.detailPhase += advance
-	length := float64(len(taps))
-	for g.detailPhase >= length {
-		g.detailPhase -= length
-	}
-	for g.detailPhase < 0 {
-		g.detailPhase += length
-	}
-	idx := int(g.detailPhase)
-	nextIdx := (idx + 1) % len(taps)
-	frac := float32(g.detailPhase - float64(idx))
-	sample := taps[idx]*(1-frac) + taps[nextIdx]*frac
-	g.detailAvg += (sample - g.detailAvg) * detailHighpass
-	return (sample - g.detailAvg) * detailMix
-}
-
-func (g *Game) updateSurroundDirections() {
-	taps := g.detailTaps
-	if len(taps) == 0 {
-		g.surroundLeft, g.surroundRight = 0, 0
-		return
-	}
-	fx, fy := g.listenerForwardX, g.listenerForwardY
-	if fx == 0 && fy == 0 {
-		fy = -1
-	}
-	baseAngle := math.Atan2(fy, fx)
-	g.surroundLeft = g.detailDirectionalSample(baseAngle + math.Pi/2)
-	g.surroundRight = g.detailDirectionalSample(baseAngle - math.Pi/2)
-}
-
-func (g *Game) detailDirectionalSample(theta float64) float32 {
-	taps := g.detailTaps
-	if len(taps) == 0 {
-		return 0
-	}
-	twoPi := math.Pi * 2
-	theta = math.Mod(theta, twoPi)
-	if theta < 0 {
-		theta += twoPi
-	}
-	pos := theta / twoPi * float64(len(taps))
-	base := int(math.Floor(pos))
-	frac := pos - float64(base)
-	width := surroundTapWidth
-	var num float64
-	var den float64
-	for offset := -width; offset <= width; offset++ {
-		idx := (base + offset) % len(taps)
-		if idx < 0 {
-			idx += len(taps)
-		}
-		weight := math.Pow(surroundTapFalloff, math.Abs(float64(offset)))
-		if offset == 0 {
-			interp := taps[idx]
-			nextIdx := (idx + 1) % len(taps)
-			nextVal := taps[nextIdx]
-			interp = interp*(1-float32(frac)) + nextVal*float32(frac)
-			num += float64(interp) * weight
-		} else {
-			num += float64(taps[idx]) * weight
-		}
-		den += weight
-	}
-	if den == 0 {
-		return 0
-	}
-	return float32(num / den)
-}
-
-func (g *Game) updateBandEnergies(localEnergy float32) {
-	if localEnergy < 0 {
-		localEnergy = -localEnergy
-	}
-	g.lowEnergyEnv += (localEnergy - g.lowEnergyEnv) * lowBandSmoothing
-	g.midEnergyEnv += (localEnergy - g.midEnergyEnv) * midBandSmoothing
-	g.highEnergyEnv += (localEnergy - g.highEnergyEnv) * highBandSmoothing
-
-	lowBand := g.lowEnergyEnv
-	midBand := g.midEnergyEnv - g.lowEnergyEnv
-	highBand := g.highEnergyEnv - g.midEnergyEnv
-	if midBand < 0 {
-		midBand = 0
-	}
-	if highBand < 0 {
-		highBand = 0
-	}
-
-	g.bandLowEnergy += (lowBand - g.bandLowEnergy) * bandResponseSmoothing
-	g.bandMidEnergy += (midBand - g.bandMidEnergy) * bandResponseSmoothing
-	g.bandHighEnergy += (highBand - g.bandHighEnergy) * bandResponseSmoothing
-}
-
-func (g *Game) accumulateControlSample(center, left, right earSnapshot, stepDuration float64) {
-	g.controlPressureSum += float64(center.pressure)
-	g.controlEnergySum += float64(center.energy)
-	g.controlGradientSum += float64(center.gradient)
-	g.controlLeftPressureSum += float64(left.pressure)
-	g.controlLeftEnergySum += float64(left.energy)
-	g.controlLeftGradientSum += float64(left.gradient)
-	g.controlRightPressureSum += float64(right.pressure)
-	g.controlRightEnergySum += float64(right.energy)
-	g.controlRightGradientSum += float64(right.gradient)
-	g.controlDurationSum += stepDuration
-	g.controlSamples++
-	g.flushControlAccumulator(false)
-}
-
-func (g *Game) flushControlAccumulator(force bool) {
-	if g.controlSamples == 0 {
-		return
-	}
-	if !force && g.controlSamples < controlDownsampleSteps {
-		return
-	}
-	scale := 1.0 / float64(g.controlSamples)
-	center := earSnapshot{
-		pressure: float32(g.controlPressureSum * scale),
-		energy:   float32(g.controlEnergySum * scale),
-		gradient: float32(g.controlGradientSum * scale),
-	}
-	left := earSnapshot{
-		pressure: float32(g.controlLeftPressureSum * scale),
-		energy:   float32(g.controlLeftEnergySum * scale),
-		gradient: float32(g.controlLeftGradientSum * scale),
-	}
-	right := earSnapshot{
-		pressure: float32(g.controlRightPressureSum * scale),
-		energy:   float32(g.controlRightEnergySum * scale),
-		gradient: float32(g.controlRightGradientSum * scale),
-	}
-	duration := g.controlDurationSum
-
-	g.controlPressureSum = 0
-	g.controlEnergySum = 0
-	g.controlGradientSum = 0
-	g.controlLeftPressureSum = 0
-	g.controlLeftEnergySum = 0
-	g.controlLeftGradientSum = 0
-	g.controlRightPressureSum = 0
-	g.controlRightEnergySum = 0
-	g.controlRightGradientSum = 0
-	g.controlDurationSum = 0
-	g.controlSamples = 0
-
-	if duration <= 0 {
-		duration = float64(controlDownsampleSteps) / simStepsPerSecond
-	}
-	g.pushAudioSample(center, left, right, duration)
-}
-
-func (g *Game) bandMixWeights() (float32, float32, float32) {
-	total := g.bandLowEnergy + g.bandMidEnergy + g.bandHighEnergy
-	if total < bandWeightFloor {
-		return 0.55, 0.3, 0.15
-	}
-	invTotal := float32(1.0 / total)
-	return g.bandLowEnergy * invTotal, g.bandMidEnergy * invTotal, g.bandHighEnergy * invTotal
-}
-
-func (g *Game) earPanWeights(leftEnergy, rightEnergy float32) (float32, float32) {
-	total := leftEnergy + rightEnergy
-	if total < 1e-5 {
-		return 0.5, 0.5
-	}
-	leftWeight := leftEnergy / total
-	leftPan := float32(0.5 + (float64(leftWeight)-0.5)*0.8)
-	if leftPan < 0.1 {
-		leftPan = 0.1
-	} else if leftPan > 0.9 {
-		leftPan = 0.9
-	}
-	return leftPan, 1 - leftPan
-}
-
-func clampSample(v float32) float32 {
-	if v > 1 {
-		return 1
-	}
-	if v < -1 {
-		return -1
-	}
-	return v
-}
-
-func (g *Game) compressorGainFor(level float32) float32 {
-	if level < 0 {
-		level = -level
-	}
-	coeff := float32(compressorRelease)
-	if level > g.compressorEnv {
-		coeff = float32(compressorAttack)
-	}
-	g.compressorEnv += (level - g.compressorEnv) * coeff
-	env := g.compressorEnv
-	desired := float32(1)
-	if env > compressorThreshold && env > 0 {
-		over := env - float32(compressorThreshold)
-		target := float32(compressorThreshold) + over/float32(compressorRatio)
-		if target <= 0 {
-			target = compressorThreshold
-		}
-		desired = target / env
-	}
-	if desired < float32(compressorFloor) {
-		desired = float32(compressorFloor)
-	}
-	g.compressorGain += (desired - g.compressorGain) * float32(compressorGainSmooth)
-	return g.compressorGain
-}
-
-func (g *Game) pushAudioSample(center, left, right earSnapshot, stepDuration float64) {
-	if g.audioStream == nil {
-		g.sampleAccumulator = 0
-		return
-	}
-	g.sampleAccumulator += stepDuration * sampleRate
-	for {
-		samples := int(g.sampleAccumulator)
-		if samples < minSamplesPerPush {
-			break
-		}
-		if samples > maxSamplesPerPush {
-			samples = maxSamplesPerPush
-		}
-		g.produceAudioChunk(samples, center, left, right)
-		g.sampleAccumulator -= float64(samples)
-	}
-}
-
-func (g *Game) produceAudioChunk(frames int, center, left, right earSnapshot) {
-	avgEnergy := (center.energy + left.energy + right.energy) / 3
-	avgGradient := (center.gradient + left.gradient + right.gradient) / 3
-	targetAmp := float32(math.Min(1, math.Max(float64(avgEnergy)*3+float64(avgGradient)*wavefrontAmpBoost, float64(minNoiseFloor))))
-	g.audioAmp += (targetAmp - g.audioAmp) * ampSmoothing
-	noise := g.ensureAudioBuffer(frames)
-	gradientAmt := float32(math.Min(1, float64(avgGradient)*6))
-	lowWeight, midWeight, highWeight := g.bandMixWeights()
-	lowShape := 0.55 * (0.6 + 0.8*lowWeight)
-	midShape := 0.35 * (0.6 + 0.8*midWeight)
-	highShape := 0.1 * (0.7 + 1.3*highWeight)
-	shapeSum := lowShape + midShape + highShape
-	var lowBase, midBase, highBase float32
-	if shapeSum > 0 {
-		scale := g.audioAmp / float32(shapeSum)
-		lowBase = float32(lowShape) * scale
-		midBase = float32(midShape) * scale
-		highBase = float32(highShape)*scale + gradientAmt*0.25
-	} else {
-		lowBase = g.audioAmp * 0.55
-		midBase = g.audioAmp * 0.35
-		highBase = g.audioAmp*0.1 + gradientAmt*0.25
-	}
-	leftPan, rightPan := g.earPanWeights(left.energy, right.energy)
-
-	if g.amplitudeOnly {
-		totalBandEnergy := g.bandLowEnergy + g.bandMidEnergy + g.bandHighEnergy
-		gain := g.audioAmp*4 + 0.05 + totalBandEnergy*0.5
-		leftBase := (center.pressure*centerDirectMix + left.pressure*0.7 + g.surroundLeft*surroundMix) * gain
-		rightBase := (center.pressure*centerDirectMix + right.pressure*0.7 + g.surroundRight*surroundMix) * gain
-		leftGrad := (left.gradient + center.gradient*0.5) * gradientMix
-		rightGrad := (right.gradient + center.gradient*0.5) * gradientMix
-		leftTarget := clampSample(leftBase + leftGrad)
-		rightTarget := clampSample(rightBase + rightGrad)
-		leftState := g.ampOnlyLeftState
-		rightState := g.ampOnlyRightState
-		for i := 0; i < frames; i++ {
-			leftState += (leftTarget - leftState) * ampOnlyRampSmooth
-			rightState += (rightTarget - rightState) * ampOnlyRampSmooth
-			grain := (g.noiseRand.Float32()*2 - 1) * ampOnlyNoiseMix
-			detail := g.nextDetailValue(avgGradient)
-			leftSample := leftState + grain*leftPan + detail*leftPan
-			rightSample := rightState + grain*rightPan + detail*rightPan
-			maxAbs := float32(math.Max(math.Abs(float64(leftSample)), math.Abs(float64(rightSample))))
-			compGain := g.compressorGainFor(maxAbs)
-			idx := i * audioChannels
-			noise[idx] = clampSample(leftSample * compGain)
-			noise[idx+1] = clampSample(rightSample * compGain)
-		}
-		g.ampOnlyLeftState = leftState
-		g.ampOnlyRightState = rightState
-		g.audioStream.PushSamples(noise)
-		return
-	}
-
-	for i := 0; i < frames; i++ {
-		white := g.noiseRand.Float32()*2 - 1
-		g.brownState += white * brownStep
-		if g.brownState > 1 {
-			g.brownState = 1
-		} else if g.brownState < -1 {
-			g.brownState = -1
-		}
-		g.pinkState += (white - g.pinkState) * pinkSmoothing
-		g.brightState += (white - g.brightState) * brightSmoothing
-		low := g.brownState
-		mid := g.pinkState
-		high := white - g.brightState
-		bed := low*lowBase + mid*midBase + high*highBase
-		centerPressure := center.pressure * (pressureMix * centerDirectMix)
-		detail := g.nextDetailValue(avgGradient)
-		leftSample := bed*leftPan + left.pressure*pressureMix + centerPressure + (left.gradient+center.gradient*0.5)*gradientMix + detail*leftPan + g.surroundLeft*surroundMix
-		rightSample := bed*rightPan + right.pressure*pressureMix + centerPressure + (right.gradient+center.gradient*0.5)*gradientMix + detail*rightPan + g.surroundRight*surroundMix
-		maxAbs := float32(math.Max(math.Abs(float64(leftSample)), math.Abs(float64(rightSample))))
-		compGain := g.compressorGainFor(maxAbs)
-		idx := i * audioChannels
-		noise[idx] = clampSample(leftSample * compGain)
-		noise[idx+1] = clampSample(rightSample * compGain)
-	}
-	g.audioStream.PushSamples(noise)
-}
-
-func (g *Game) ensureAudioBuffer(frames int) []float32 {
-	needed := frames * audioChannels
-	if cap(g.noiseBuf) < needed {
-		g.noiseBuf = make([]float32, needed)
-	}
-	g.noiseBuf = g.noiseBuf[:needed]
-	return g.noiseBuf
 }
 
 func (g *Game) Draw(screen *ebiten.Image) {
-	img := make([]byte, w*h*4)
+	if len(g.pixelBuf) != w*h*4 {
+		g.pixelBuf = make([]byte, w*h*4)
+	}
+	img := g.pixelBuf
 	showWalls := *showWallsFlag
 	for i := 0; i < w*h; i++ {
+		base := i * 4
 		if showWalls && len(g.walls) > 0 && g.walls[i] {
-			img[i*4] = 30
-			img[i*4+1] = 40
-			img[i*4+2] = 80
-			img[i*4+3] = 255
+			img[base] = 30
+			img[base+1] = 40
+			img[base+2] = 80
+			img[base+3] = 255
 			continue
 		}
 		x := i % w
@@ -1113,10 +547,10 @@ func (g *Game) Draw(screen *ebiten.Image) {
 		v := g.field.readCurr(x, y)
 		v = float32(math.Max(-1, math.Min(1, float64(v))))
 		intensity := byte(math.Abs(float64(v)) * 255)
-		img[i*4] = intensity
-		img[i*4+1] = intensity
-		img[i*4+2] = intensity
-		img[i*4+3] = 255
+		img[base] = intensity
+		img[base+1] = intensity
+		img[base+2] = intensity
+		img[base+3] = 255
 	}
 	screen.WritePixels(img)
 
@@ -1135,15 +569,11 @@ func (g *Game) Draw(screen *ebiten.Image) {
 func (g *Game) Layout(_, _ int) (int, int) { return w, h }
 
 func (g *Game) drawEarIndicators(screen *ebiten.Image, cx, cy int) {
-	leftX, leftY := g.leftEarPosX, g.leftEarPosY
-	rightX, rightY := g.rightEarPosX, g.rightEarPosY
-	if leftX == 0 && leftY == 0 && rightX == 0 && rightY == 0 {
-		ox, oy := g.earOffsets()
-		leftX = clampCoord(cx-ox, 0, w-1)
-		leftY = clampCoord(cy-oy, 0, h-1)
-		rightX = clampCoord(cx+ox, 0, w-1)
-		rightY = clampCoord(cy+oy, 0, h-1)
-	}
+	ox, oy := g.earOffsets()
+	leftX := clampCoord(cx-ox, 0, w-1)
+	leftY := clampCoord(cy-oy, 0, h-1)
+	rightX := clampCoord(cx+ox, 0, w-1)
+	rightY := clampCoord(cy+oy, 0, h-1)
 	drawLine(screen, cx, cy, leftX, leftY, color.RGBA{0, 255, 200, 200})
 	drawLine(screen, cx, cy, rightX, rightY, color.RGBA{0, 200, 255, 200})
 	if leftX >= 0 && leftX < w && leftY >= 0 && leftY < h {
@@ -1185,101 +615,13 @@ func drawLine(screen *ebiten.Image, x0, y0, x1, y1 int, clr color.Color) {
 	}
 }
 
-// WaveStream implements io.Read for Ebiten's audio player
-type WaveStream struct {
-	buf        []float32
-	mutex      sync.Mutex
-	cond       *sync.Cond
-	lastSample float32
-}
-
-func NewWaveStream() *WaveStream {
-	ws := &WaveStream{}
-	ws.cond = sync.NewCond(&ws.mutex)
-	return ws
-}
-
-func (s *WaveStream) PushSamples(samples []float32) {
-	if len(samples) == 0 {
-		return
-	}
-	s.mutex.Lock()
-	s.buf = append(s.buf, samples...)
-	maxFloats := maxAudioSamples * audioChannels
-	if len(s.buf) > maxFloats {
-		s.buf = s.buf[len(s.buf)-maxFloats:] // keep most recent window
-	}
-	lastIdx := len(s.buf) - audioChannels
-	if lastIdx >= 0 && lastIdx+audioChannels <= len(s.buf) {
-		var sum float32
-		for ch := 0; ch < audioChannels; ch++ {
-			sum += s.buf[lastIdx+ch]
-		}
-		s.lastSample = sum / float32(audioChannels)
-	}
-	s.cond.Broadcast()
-	s.mutex.Unlock()
-}
-
-func (s *WaveStream) Read(p []byte) (int, error) {
-	s.mutex.Lock()
-	defer s.mutex.Unlock()
-	frameCount := len(p) / audioFrameBytes
-	if frameCount == 0 {
-		return 0, nil
-	}
-	for len(s.buf) == 0 {
-		s.cond.Wait()
-	}
-	availableFrames := len(s.buf) / audioChannels
-	if frameCount > availableFrames {
-		frameCount = availableFrames
-	}
-	for i := 0; i < frameCount; i++ {
-		var sampleSum float32
-		for ch := 0; ch < audioChannels; ch++ {
-			sampleValue := s.buf[i*audioChannels+ch]
-			sampleSum += sampleValue
-			sample := int16(sampleValue * 20000)
-			base := i*audioFrameBytes + ch*audioBytesPerSample
-			p[base] = byte(sample)
-			p[base+1] = byte(sample >> 8)
-		}
-		s.lastSample = sampleSum / float32(audioChannels)
-	}
-	consumed := frameCount * audioChannels
-	s.buf = s.buf[consumed:]
-	return frameCount * audioFrameBytes, nil
-}
-
-func (s *WaveStream) Close() error { return nil }
-
-func (s *WaveStream) Seek(offset int64, whence int) (int64, error) {
-	// Ebiten's audio player probes the stream with Seek(0, io.SeekStart) and similar no-op requests.
-	if offset == 0 {
-		switch whence {
-		case io.SeekStart, io.SeekCurrent, io.SeekEnd:
-			return 0, nil
-		}
-	}
-	return 0, io.ErrUnexpectedEOF
-}
-
 func main() {
 	flag.Parse()
 	runtime.GOMAXPROCS(runtime.NumCPU())
-	var stream *WaveStream
-	if *audioEnabledFlag {
-		audioCtx := audio.NewContext(sampleRate)
-		stream = NewWaveStream()
-		player, _ := audioCtx.NewPlayer(stream)
-		player.Play()
-	}
-
-	g := newGame(stream, *amplitudeOnlyFlag)
+	g := newGame()
 
 	ebiten.SetWindowSize(w*windowScale, h*windowScale)
-	ebiten.SetWindowTitle("Acoustic Steps with Live Sound")
+	ebiten.SetWindowTitle("Acoustic Steps")
 	if err := ebiten.RunGame(g); err != nil {
 		panic(err)
 	}
