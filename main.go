@@ -2,11 +2,13 @@ package main
 
 import (
 	"image/color"
+	"io"
 	"math"
 	"runtime"
 	"sync"
 
 	"github.com/hajimehoshi/ebiten/v2"
+	"github.com/hajimehoshi/ebiten/v2/audio"
 )
 
 const (
@@ -15,13 +17,17 @@ const (
 	speed      = 0.3
 	emitterRad = 3
 	moveSpeed  = 2
-	stepDelay  = 15 // frames between steps
+	stepDelay  = 15
+	sampleRate = 44100
+	defaultTPS = 60.0
 )
 
 type Game struct {
-	curr, prev, next []float32
-	ex, ey           float64
-	stepTimer        int
+	curr, prev, next  []float32
+	ex, ey            float64
+	stepTimer         int
+	audioStream       *WaveStream
+	sampleAccumulator float64
 }
 
 func (g *Game) Update() error {
@@ -38,16 +44,13 @@ func (g *Game) Update() error {
 	if ebiten.IsKeyPressed(ebiten.KeyD) {
 		dx += moveSpeed
 	}
-
 	if dx != 0 && dy != 0 {
 		dx *= 0.7071
 		dy *= 0.7071
 	}
-
 	g.ex = math.Max(emitterRad, math.Min(float64(w-emitterRad-1), g.ex+dx))
 	g.ey = math.Max(emitterRad, math.Min(float64(h-emitterRad-1), g.ey+dy))
 
-	// Step emission logic
 	moving := dx != 0 || dy != 0
 	if moving {
 		g.stepTimer++
@@ -64,14 +67,13 @@ func (g *Game) Update() error {
 			}
 		}
 	} else {
-		g.stepTimer = stepDelay // reset so next movement instantly steps
+		g.stepTimer = stepDelay
 	}
 
 	// Wave equation parallel update
 	numCPU := runtime.NumCPU()
 	var wg sync.WaitGroup
 	rowsPer := h / numCPU
-
 	for i := 0; i < numCPU; i++ {
 		yStart := i * rowsPer
 		yEnd := yStart + rowsPer
@@ -95,9 +97,30 @@ func (g *Game) Update() error {
 		}(yStart, yEnd)
 	}
 	wg.Wait()
-
 	g.prev, g.curr, g.next = g.curr, g.next, g.prev
+
+	// Send one pressure sample to audio stream (upsampled to audio rate)
+	cx, cy := int(g.ex), int(g.ey)
+	if cx >= 1 && cx < w-1 && cy >= 1 && cy < h-1 {
+		v := (g.curr[cy*w+cx-1] + g.curr[cy*w+cx+1] + g.curr[(cy-1)*w+cx] + g.curr[(cy+1)*w+cx]) * 0.25
+		g.pushAudioSample(v)
+	}
+
 	return nil
+}
+
+func (g *Game) pushAudioSample(v float32) {
+	targetTPS := ebiten.ActualTPS()
+	if targetTPS < 1 {
+		targetTPS = defaultTPS
+	}
+	g.sampleAccumulator += float64(sampleRate) / targetTPS
+	samples := int(g.sampleAccumulator)
+	if samples <= 0 {
+		return
+	}
+	g.audioStream.PushRepeated(v, samples)
+	g.sampleAccumulator -= float64(samples)
 }
 
 func (g *Game) Draw(screen *ebiten.Image) {
@@ -126,17 +149,97 @@ func (g *Game) Draw(screen *ebiten.Image) {
 
 func (g *Game) Layout(_, _ int) (int, int) { return w, h }
 
+// WaveStream implements io.Read for Ebiten's audio player
+type WaveStream struct {
+	buf        []float32
+	mutex      sync.Mutex
+	lastSample float32
+}
+
+func (s *WaveStream) Push(v float32) {
+	s.PushRepeated(v, 1)
+}
+
+func (s *WaveStream) PushRepeated(v float32, count int) {
+	if count <= 0 {
+		return
+	}
+	s.mutex.Lock()
+	for i := 0; i < count; i++ {
+		s.buf = append(s.buf, v)
+	}
+	if len(s.buf) > sampleRate {
+		s.buf = s.buf[len(s.buf)-sampleRate:] // keep last second
+	}
+	s.lastSample = v
+	s.mutex.Unlock()
+}
+
+func (s *WaveStream) Read(p []byte) (int, error) {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+	n := len(p) / 4 // stereo 16-bit
+	if n == 0 {
+		return 0, nil
+	}
+	readable := len(s.buf)
+	for i := 0; i < n; i++ {
+		var sampleValue float32
+		if i < readable {
+			sampleValue = s.buf[i]
+		} else {
+			sampleValue = s.lastSample
+		}
+		s.lastSample = sampleValue
+		sample := int16(sampleValue * 20000)
+		p[4*i] = byte(sample)
+		p[4*i+1] = byte(sample >> 8)
+		p[4*i+2] = p[4*i]
+		p[4*i+3] = p[4*i+1]
+	}
+	consumed := n
+	if consumed > readable {
+		consumed = readable
+	}
+	if consumed < len(s.buf) {
+		s.buf = s.buf[consumed:]
+	} else {
+		s.buf = s.buf[:0]
+	}
+	return len(p), nil
+}
+
+func (s *WaveStream) Close() error { return nil }
+
+func (s *WaveStream) Seek(offset int64, whence int) (int64, error) {
+	// Ebiten's audio player probes the stream with Seek(0, io.SeekStart) and similar no-op requests.
+	if offset == 0 {
+		switch whence {
+		case io.SeekStart, io.SeekCurrent, io.SeekEnd:
+			return 0, nil
+		}
+	}
+	return 0, io.ErrUnexpectedEOF
+}
+
 func main() {
 	runtime.GOMAXPROCS(runtime.NumCPU())
-	ebiten.SetWindowSize(w*2, h*2)
-	ebiten.SetWindowTitle("Acoustic Steps Demo")
+	audioCtx := audio.NewContext(sampleRate)
+	stream := &WaveStream{}
+	player, _ := audioCtx.NewPlayer(stream)
+	player.Play()
+
 	g := &Game{
-		curr: make([]float32, w*h),
-		prev: make([]float32, w*h),
-		next: make([]float32, w*h),
-		ex:   float64(w / 2),
-		ey:   float64(h / 2),
+		curr:        make([]float32, w*h),
+		prev:        make([]float32, w*h),
+		next:        make([]float32, w*h),
+		ex:          float64(w / 2),
+		ey:          float64(h / 2),
+		audioStream: stream,
 	}
+
+	ebiten.SetWindowSize(w*2, h*2)
+	ebiten.SetWindowTitle("Acoustic Steps with Live Sound")
 	if err := ebiten.RunGame(g); err != nil {
 		panic(err)
 	}
