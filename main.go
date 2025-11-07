@@ -14,21 +14,29 @@ import (
 )
 
 const (
-	w, h               = 256, 256
-	damp               = 0.996
-	speed              = 0.5
-	emitterRad         = 3
-	moveSpeed          = 2
-	stepDelay          = 15
-	sampleRate         = 44100
-	defaultTPS         = 60.0
-	simStepsPerSecond  = 500.0
-	brownStep          = 0.02
-	ampSmoothing       = 0.15
-	maxAudioLatencySec = 0.12
+	w, h                = 256, 256
+	damp                = 0.996
+	speed               = 0.5
+	emitterRad          = 3
+	moveSpeed           = 2
+	stepDelay           = 15
+	sampleRate          = 44100
+	defaultTPS          = 60.0
+	simStepsPerSecond   = defaultTPS * 8
+	brownStep           = 0.02
+	ampSmoothing        = 0.15
+	maxAudioLatencySec  = 0.5
+	minAudioBufferChunk = 1024
+	minNoiseFloor       = 0.02
 )
 
 var maxAudioSamples = int(float64(sampleRate) * maxAudioLatencySec)
+
+func init() {
+	if maxAudioSamples < minAudioBufferChunk {
+		maxAudioSamples = minAudioBufferChunk
+	}
+}
 
 type Game struct {
 	curr, prev, next   []float32
@@ -40,6 +48,8 @@ type Game struct {
 	brownState         float32
 	audioAmp           float32
 	physicsAccumulator float64
+	noiseBuf           []float32
+	lastAudioTime      time.Time
 }
 
 func (g *Game) Update() error {
@@ -86,6 +96,16 @@ func (g *Game) Update() error {
 	}
 
 	cx, cy := int(g.ex), int(g.ey)
+	now := time.Now()
+	if g.lastAudioTime.IsZero() {
+		g.lastAudioTime = now
+	}
+	frameElapsed := now.Sub(g.lastAudioTime)
+	frameSeconds := frameElapsed.Seconds()
+	if frameSeconds <= 0 {
+		frameSeconds = 1.0 / simStepsPerSecond
+	}
+	g.lastAudioTime = now
 	actualTPS := ebiten.ActualTPS()
 	if actualTPS < 1 {
 		actualTPS = defaultTPS
@@ -95,15 +115,19 @@ func (g *Game) Update() error {
 	if steps < 1 {
 		steps = 1
 	}
+	stepDuration := frameSeconds / float64(steps)
+	if stepDuration <= 0 {
+		stepDuration = 1.0 / simStepsPerSecond
+	}
 	for i := 0; i < steps; i++ {
-		g.stepWave(cx, cy)
+		g.stepWave(cx, cy, stepDuration)
 	}
 	g.physicsAccumulator -= float64(steps)
 
 	return nil
 }
 
-func (g *Game) stepWave(cx, cy int) {
+func (g *Game) stepWave(cx, cy int, stepDuration float64) {
 	numCPU := runtime.NumCPU()
 	rowsPer := (h + numCPU - 1) / numCPU
 	var wg sync.WaitGroup
@@ -136,29 +160,49 @@ func (g *Game) stepWave(cx, cy int) {
 	g.prev, g.curr, g.next = g.curr, g.next, g.prev
 
 	if cx >= 1 && cx < w-1 && cy >= 1 && cy < h-1 {
-		v := (g.curr[cy*w+cx-1] + g.curr[cy*w+cx+1] + g.curr[(cy-1)*w+cx] + g.curr[(cy+1)*w+cx]) * 0.25
-		g.pushAudioSample(v)
+		pressure, energy := g.samplePressureEnergy(cx, cy)
+		g.pushAudioSample(pressure, energy, stepDuration)
 	} else {
-		g.pushAudioSample(0)
+		g.pushAudioSample(0, 0, stepDuration)
 	}
 }
 
-func (g *Game) pushAudioSample(v float32) {
-	g.sampleAccumulator += float64(sampleRate) / simStepsPerSecond
+func (g *Game) samplePressureEnergy(cx, cy int) (float32, float32) {
+	var sum float32
+	var energy float64
+	count := 0
+	for oy := -1; oy <= 1; oy++ {
+		y := cy + oy
+		if y < 1 || y >= h-1 {
+			continue
+		}
+		for ox := -1; ox <= 1; ox++ {
+			x := cx + ox
+			if x < 1 || x >= w-1 {
+				continue
+			}
+			v := g.curr[y*w+x]
+			sum += v
+			energy += math.Abs(float64(v))
+			count++
+		}
+	}
+	if count == 0 {
+		return 0, 0
+	}
+	return sum / float32(count), float32(energy / float64(count))
+}
+
+func (g *Game) pushAudioSample(pressure, energy float32, stepDuration float64) {
+	g.sampleAccumulator += stepDuration * sampleRate
 	samples := int(g.sampleAccumulator)
 	if samples <= 0 {
 		return
 	}
 	// Scale brown noise amplitude by local wave magnitude and smooth changes.
-	targetAmp := float32(math.Min(1, math.Abs(float64(v))*4))
+	targetAmp := float32(math.Min(1, math.Max(float64(energy)*4, float64(minNoiseFloor))))
 	g.audioAmp += (targetAmp - g.audioAmp) * ampSmoothing
-	if g.audioAmp < 0.0001 {
-		silence := make([]float32, samples)
-		g.audioStream.PushSamples(silence)
-		g.sampleAccumulator -= float64(samples)
-		return
-	}
-	noise := make([]float32, samples)
+	noise := g.ensureNoiseBuffer(samples)
 	for i := 0; i < samples; i++ {
 		g.brownState += (g.noiseRand.Float32()*2 - 1) * brownStep
 		if g.brownState > 1 {
@@ -166,10 +210,24 @@ func (g *Game) pushAudioSample(v float32) {
 		} else if g.brownState < -1 {
 			g.brownState = -1
 		}
-		noise[i] = g.brownState * g.audioAmp
+		sample := g.brownState*g.audioAmp + pressure*0.05
+		if sample > 1 {
+			sample = 1
+		} else if sample < -1 {
+			sample = -1
+		}
+		noise[i] = sample
 	}
 	g.audioStream.PushSamples(noise)
 	g.sampleAccumulator -= float64(samples)
+}
+
+func (g *Game) ensureNoiseBuffer(n int) []float32 {
+	if cap(g.noiseBuf) < n {
+		g.noiseBuf = make([]float32, n)
+	}
+	g.noiseBuf = g.noiseBuf[:n]
+	return g.noiseBuf
 }
 
 func (g *Game) Draw(screen *ebiten.Image) {
@@ -211,8 +269,8 @@ func (s *WaveStream) PushSamples(samples []float32) {
 	}
 	s.mutex.Lock()
 	s.buf = append(s.buf, samples...)
-	if len(s.buf) > sampleRate {
-		s.buf = s.buf[len(s.buf)-sampleRate:] // keep last second
+	if len(s.buf) > maxAudioSamples {
+		s.buf = s.buf[len(s.buf)-maxAudioSamples:] // keep most recent window
 	}
 	s.lastSample = s.buf[len(s.buf)-1]
 	s.mutex.Unlock()
