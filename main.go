@@ -15,11 +15,13 @@ const (
 	speed      = 0.3
 	emitterRad = 3
 	moveSpeed  = 2
+	stepDelay  = 15 // frames between steps
 )
 
 type Game struct {
 	curr, prev, next []float32
 	ex, ey           float64
+	stepTimer        int
 }
 
 func (g *Game) Update() error {
@@ -45,18 +47,27 @@ func (g *Game) Update() error {
 	g.ex = math.Max(emitterRad, math.Min(float64(w-emitterRad-1), g.ex+dx))
 	g.ey = math.Max(emitterRad, math.Min(float64(h-emitterRad-1), g.ey+dy))
 
-	if dx != 0 || dy != 0 {
-		for y := -emitterRad; y <= emitterRad; y++ {
-			for x := -emitterRad; x <= emitterRad; x++ {
-				if x*x+y*y <= emitterRad*emitterRad {
-					cx := int(g.ex) + x
-					cy := int(g.ey) + y
-					g.curr[cy*w+cx] = 1.0
+	// Step emission logic
+	moving := dx != 0 || dy != 0
+	if moving {
+		g.stepTimer++
+		if g.stepTimer >= stepDelay {
+			g.stepTimer = 0
+			for y := -emitterRad; y <= emitterRad; y++ {
+				for x := -emitterRad; x <= emitterRad; x++ {
+					if x*x+y*y <= emitterRad*emitterRad {
+						cx := int(g.ex) + x
+						cy := int(g.ey) + y
+						g.curr[cy*w+cx] = 1.0
+					}
 				}
 			}
 		}
+	} else {
+		g.stepTimer = stepDelay // reset so next movement instantly steps
 	}
 
+	// Wave equation parallel update
 	numCPU := runtime.NumCPU()
 	var wg sync.WaitGroup
 	rowsPer := h / numCPU
@@ -95,15 +106,9 @@ func (g *Game) Draw(screen *ebiten.Image) {
 		v := g.curr[i]
 		v = float32(math.Max(-1, math.Min(1, float64(v))))
 		intensity := byte(math.Abs(float64(v)) * 255)
-		if v > 0 {
-			img[i*4] = intensity // white on black
-			img[i*4+1] = intensity
-			img[i*4+2] = intensity
-		} else {
-			img[i*4] = 0
-			img[i*4+1] = 0
-			img[i*4+2] = 0
-		}
+		img[i*4] = intensity
+		img[i*4+1] = intensity
+		img[i*4+2] = intensity
 		img[i*4+3] = 255
 	}
 	screen.WritePixels(img)
@@ -124,7 +129,7 @@ func (g *Game) Layout(_, _ int) (int, int) { return w, h }
 func main() {
 	runtime.GOMAXPROCS(runtime.NumCPU())
 	ebiten.SetWindowSize(w*2, h*2)
-	ebiten.SetWindowTitle("Acoustic Footsteps - Optimized BW")
+	ebiten.SetWindowTitle("Acoustic Steps Demo")
 	g := &Game{
 		curr: make([]float32, w*h),
 		prev: make([]float32, w*h),
