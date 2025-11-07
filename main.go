@@ -16,7 +16,7 @@ import (
 
 const (
 	w, h                   = 1024, 1024
-	windowScale            = 1
+	windowScale            = 2
 	damp                   = 0.997
 	speed                  = 0.5
 	waveDamp32             = float32(damp)
@@ -79,6 +79,7 @@ const (
 var (
 	amplitudeOnlyFlag = flag.Bool("amplitude-only", true, "output direct wave amplitude instead of noise texture")
 	showWallsFlag     = flag.Bool("show-walls", false, "render wall geometry overlays")
+	audioEnabledFlag  = flag.Bool("audio", false, "enable audio playback")
 )
 
 var maxAudioSamples = int(float64(sampleRate) * maxAudioLatencySec)
@@ -987,6 +988,10 @@ func (g *Game) compressorGainFor(level float32) float32 {
 }
 
 func (g *Game) pushAudioSample(center, left, right earSnapshot, stepDuration float64) {
+	if g.audioStream == nil {
+		g.sampleAccumulator = 0
+		return
+	}
 	g.sampleAccumulator += stepDuration * sampleRate
 	for {
 		samples := int(g.sampleAccumulator)
@@ -1263,10 +1268,13 @@ func (s *WaveStream) Seek(offset int64, whence int) (int64, error) {
 func main() {
 	flag.Parse()
 	runtime.GOMAXPROCS(runtime.NumCPU())
-	audioCtx := audio.NewContext(sampleRate)
-	stream := NewWaveStream()
-	player, _ := audioCtx.NewPlayer(stream)
-	player.Play()
+	var stream *WaveStream
+	if *audioEnabledFlag {
+		audioCtx := audio.NewContext(sampleRate)
+		stream = NewWaveStream()
+		player, _ := audioCtx.NewPlayer(stream)
+		player.Play()
+	}
 
 	g := newGame(stream, *amplitudeOnlyFlag)
 
