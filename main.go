@@ -16,15 +16,17 @@ import (
 
 const (
 	w, h                  = 256, 256
-	damp                  = 0.9995
+	damp                  = 0.9998
 	speed                 = 0.5
+	waveDamp32            = float32(damp)
+	waveSpeed32           = float32(speed)
 	emitterRad            = 3
 	moveSpeed             = 2
 	stepDelay             = 15
 	sampleRate            = 44100
 	defaultTPS            = 60.0
 	simStepsPerSecond     = defaultTPS * 100
-	audioTicksPerSecond   = 960.0
+	audioTicksPerSecond   = simStepsPerSecond
 	brownStep             = 0.02
 	pinkSmoothing         = 0.05
 	brightSmoothing       = 0.2
@@ -56,8 +58,216 @@ func init() {
 	}
 }
 
+type half uint16
+
+func float32ToHalf(v float32) half {
+	bits := math.Float32bits(v)
+	sign := (bits >> 16) & 0x8000
+	exp := int32((bits>>23)&0xFF) - 127 + 15
+	mant := bits & 0x7FFFFF
+
+	switch {
+	case exp <= 0:
+		if exp < -10 {
+			return half(sign)
+		}
+		mant |= 0x800000
+		shift := uint32(1 - exp)
+		mant16 := mant >> (shift + 13)
+		if (mant>>(shift+12))&1 == 1 {
+			mant16++
+		}
+		return half(sign | mant16)
+	case exp >= 0x1F:
+		return half(sign | 0x7C00)
+	default:
+		mant16 := mant >> 13
+		if mant&0x1FFF > 0x1000 || (mant&0x1FFF == 0x1000 && mant16&1 == 1) {
+			mant16++
+			if mant16 == 0x0400 {
+				mant16 = 0
+				exp++
+				if exp == 0x1F {
+					return half(sign | 0x7C00)
+				}
+			}
+		}
+		return half(sign | uint32(exp)<<10 | mant16)
+	}
+}
+
+func halfToFloat32(h half) float32 {
+	bits := uint16(h)
+	sign := uint32(bits&0x8000) << 16
+	exp := (bits >> 10) & 0x1F
+	mant := uint32(bits & 0x3FF)
+
+	switch exp {
+	case 0:
+		if mant == 0 {
+			return math.Float32frombits(sign)
+		}
+		exp = 1
+		for mant&0x400 == 0 {
+			mant <<= 1
+			exp--
+		}
+		mant &= 0x3FF
+		fbits := sign | ((uint32(exp - 15 + 127)) << 23) | (mant << 13)
+		return math.Float32frombits(fbits)
+	case 0x1F:
+		fbits := sign | 0x7F800000 | (mant << 13)
+		return math.Float32frombits(fbits)
+	default:
+		fbits := sign | ((uint32(exp - 15 + 127)) << 23) | (mant << 13)
+		return math.Float32frombits(fbits)
+	}
+}
+
+type wavePlane [][]half
+
+type waveField struct {
+	width, height int
+	curr          wavePlane
+	prev          wavePlane
+	next          wavePlane
+}
+
+func newWaveField(width, height int) *waveField {
+	return &waveField{
+		width: width, height: height,
+		curr: makePlane(width, height),
+		prev: makePlane(width, height),
+		next: makePlane(width, height),
+	}
+}
+
+func makePlane(width, height int) wavePlane {
+	p := make(wavePlane, height)
+	for y := range p {
+		p[y] = make([]half, width)
+	}
+	return p
+}
+
+func (f *waveField) setCurr(x, y int, value float32) {
+	f.curr[y][x] = float32ToHalf(value)
+}
+
+func (f *waveField) zeroCell(x, y int) {
+	f.curr[y][x] = 0
+	f.prev[y][x] = 0
+	f.next[y][x] = 0
+}
+
+func (f *waveField) readCurr(x, y int) float32 {
+	return halfToFloat32(f.curr[y][x])
+}
+
+func (f *waveField) swap() {
+	f.prev, f.curr, f.next = f.curr, f.next, f.prev
+}
+
+func (f *waveField) zeroBoundaries() {
+	lastRow := f.height - 1
+	lastCol := f.width - 1
+	for x := 0; x < f.width; x++ {
+		f.next[0][x] = 0
+		f.next[lastRow][x] = 0
+	}
+	for y := 1; y < lastRow; y++ {
+		f.next[y][0] = 0
+		f.next[y][lastCol] = 0
+	}
+}
+
+type rowMask struct {
+	y  int
+	xs []int
+}
+
+type workerMask struct {
+	rows []rowMask
+}
+
+type workerJob struct {
+	field *waveField
+	mask  *workerMask
+	wg    *sync.WaitGroup
+}
+
+type rowCache struct {
+	center []float32
+	prev   []float32
+	top    []float32
+	bottom []float32
+}
+
+func newRowCache(width int) *rowCache {
+	return &rowCache{
+		center: make([]float32, width),
+		prev:   make([]float32, width),
+		top:    make([]float32, width),
+		bottom: make([]float32, width),
+	}
+}
+
+func runWaveWorker(jobs <-chan workerJob, width int) {
+	cache := newRowCache(width)
+	for job := range jobs {
+		if job.mask == nil || len(job.mask.rows) == 0 {
+			if job.wg != nil {
+				job.wg.Done()
+			}
+			continue
+		}
+		processMask(job.field, job.mask, cache)
+		if job.wg != nil {
+			job.wg.Done()
+		}
+	}
+}
+
+func processMask(field *waveField, mask *workerMask, cache *rowCache) {
+	for _, row := range mask.rows {
+		y := row.y
+		convertRow(field.curr[y], cache.center)
+		convertRow(field.prev[y], cache.prev)
+		convertRow(field.curr[y-1], cache.top)
+		convertRow(field.curr[y+1], cache.bottom)
+
+		nextRow := field.next[y]
+		nextRow[0] = 0
+		nextRow[len(nextRow)-1] = 0
+		for _, x := range row.xs {
+			lap := cache.center[x-1] + cache.center[x+1] + cache.top[x] + cache.bottom[x] - 4*cache.center[x]
+			val := (2*cache.center[x] - cache.prev[x]) + waveSpeed32*lap
+			val *= waveDamp32
+			nextRow[x] = float32ToHalf(val)
+		}
+	}
+}
+
+func convertRow(src []half, dst []float32) {
+	for i := range src {
+		dst[i] = halfToFloat32(src[i])
+	}
+}
+
+func assignRowMasks(workerCount int, rows []rowMask) []workerMask {
+	if workerCount < 1 {
+		workerCount = 1
+	}
+	masks := make([]workerMask, workerCount)
+	for idx, row := range rows {
+		workerIdx := idx % workerCount
+		masks[workerIdx].rows = append(masks[workerIdx].rows, row)
+	}
+	return masks
+}
+
 type Game struct {
-	curr, prev, next   []float32
+	field              *waveField
 	ex, ey             float64
 	stepTimer          int
 	audioStream        *WaveStream
@@ -73,6 +283,68 @@ type Game struct {
 	walls              []bool
 	levelRand          *rand.Rand
 	amplitudeOnly      bool
+	workerJobs         chan workerJob
+	workerCount        int
+	workerMasks        []workerMask
+	maskDirty          bool
+}
+
+func newGame(stream *WaveStream, amplitudeOnly bool) *Game {
+	workerCount := runtime.NumCPU()
+	if workerCount < 1 {
+		workerCount = 1
+	}
+	g := &Game{
+		field:             newWaveField(w, h),
+		ex:                float64(w / 2),
+		ey:                float64(h / 2),
+		audioStream:       stream,
+		noiseRand:         rand.New(rand.NewSource(time.Now().UnixNano())),
+		levelRand:         rand.New(rand.NewSource(time.Now().UnixNano() + 1)),
+		walls:             make([]bool, w*h),
+		amplitudeOnly:     amplitudeOnly,
+		workerCount:       workerCount,
+		workerJobs:        make(chan workerJob, workerCount),
+		maskDirty:         true,
+		lastAudioTime:     time.Time{},
+		noiseBuf:          nil,
+		sampleAccumulator: 0,
+	}
+	for i := 0; i < workerCount; i++ {
+		go runWaveWorker(g.workerJobs, g.field.width)
+	}
+	g.generateWalls()
+	g.rebuildInteriorMask()
+	return g
+}
+
+func (g *Game) rebuildInteriorMask() {
+	if g.workerCount < 1 {
+		g.workerCount = 1
+	}
+	rows := make([]rowMask, 0, h-2)
+	for y := 1; y < h-1; y++ {
+		base := y * w
+		xs := make([]int, 0, w-2)
+		for x := 1; x < w-1; x++ {
+			if g.walls[base+x] {
+				continue
+			}
+			xs = append(xs, x)
+		}
+		if len(xs) == 0 {
+			continue
+		}
+		rows = append(rows, rowMask{y: y, xs: xs})
+	}
+	g.workerMasks = assignRowMasks(g.workerCount, rows)
+	g.maskDirty = false
+}
+
+func (g *Game) ensureInteriorMask() {
+	if g.maskDirty || len(g.workerMasks) != g.workerCount {
+		g.rebuildInteriorMask()
+	}
 }
 
 func (g *Game) Update() error {
@@ -116,7 +388,7 @@ func (g *Game) Update() error {
 						if g.isWall(cx, cy) {
 							continue
 						}
-						g.curr[cy*w+cx] = 1.0
+						g.field.setCurr(cx, cy, 1.0)
 					}
 				}
 			}
@@ -200,21 +472,22 @@ func (g *Game) generateWalls() {
 			cy += dy
 		}
 	}
+	g.maskDirty = true
 }
 
 func (g *Game) trySetWall(x, y int) {
 	if x <= 1 || x >= w-1 || y <= 1 || y >= h-1 {
 		return
 	}
-	dist := math.Hypot(float64(x)-g.ex, float64(y)-g.ey)
-	if dist < float64(wallExclusionRadius) {
+	dx := float64(x) - g.ex
+	dy := float64(y) - g.ey
+	if dx*dx+dy*dy < float64(wallExclusionRadius*wallExclusionRadius) {
 		return
 	}
 	idx := y*w + x
 	g.walls[idx] = true
-	g.curr[idx] = 0
-	g.prev[idx] = 0
-	g.next[idx] = 0
+	g.field.zeroCell(x, y)
+	g.maskDirty = true
 }
 
 func (g *Game) isWall(x, y int) bool {
@@ -228,49 +501,23 @@ func (g *Game) isWall(x, y int) bool {
 }
 
 func (g *Game) stepWave(cx, cy int, stepDuration float64) {
-	hasWalls := len(g.walls) > 0
-	if hasWalls {
-		for idx, wall := range g.walls {
-			if wall {
-				g.curr[idx] = 0
-				g.prev[idx] = 0
-			}
-		}
-	}
-	numCPU := runtime.NumCPU()
-	rowsPer := (h + numCPU - 1) / numCPU
+	g.ensureInteriorMask()
 	var wg sync.WaitGroup
-	for i := 0; i < numCPU; i++ {
-		yStart := i * rowsPer
-		if yStart >= h {
-			break
-		}
-		yEnd := yStart + rowsPer
-		if yEnd > h {
-			yEnd = h
+	for i := range g.workerMasks {
+		mask := &g.workerMasks[i]
+		if len(mask.rows) == 0 {
+			continue
 		}
 		wg.Add(1)
-		go func(y0, y1 int) {
-			defer wg.Done()
-			for y := y0; y < y1; y++ {
-				if y == 0 || y == h-1 {
-					continue
-				}
-				for x := 1; x < w-1; x++ {
-					i := y*w + x
-					if hasWalls && g.walls[i] {
-						g.next[i] = 0
-						continue
-					}
-					lap := g.curr[i-1] + g.curr[i+1] + g.curr[i-w] + g.curr[i+w] - 4*g.curr[i]
-					g.next[i] = (2*g.curr[i] - g.prev[i]) + float32(speed)*lap
-					g.next[i] *= damp
-				}
-			}
-		}(yStart, yEnd)
+		g.workerJobs <- workerJob{
+			field: g.field,
+			mask:  mask,
+			wg:    &wg,
+		}
 	}
 	wg.Wait()
-	g.prev, g.curr, g.next = g.curr, g.next, g.prev
+	g.field.zeroBoundaries()
+	g.field.swap()
 
 	if cx >= 1 && cx < w-1 && cy >= 1 && cy < h-1 {
 		pressure, energy, gradient := g.samplePressureEnergy(cx, cy)
@@ -298,18 +545,18 @@ func (g *Game) samplePressureEnergy(cx, cy int) (float32, float32, float32) {
 			if g.isWall(x, y) {
 				continue
 			}
-			v := g.curr[y*w+x]
+			v := g.field.readCurr(x, y)
 			sum += v
 			energy += math.Abs(float64(v))
 			count++
 			if x > 0 && x < w-1 {
 				if !g.isWall(x+1, y) && !g.isWall(x-1, y) {
-					gx += float64(g.curr[y*w+x+1] - g.curr[y*w+x-1])
+					gx += float64(g.field.readCurr(x+1, y) - g.field.readCurr(x-1, y))
 				}
 			}
 			if y > 0 && y < h-1 {
 				if !g.isWall(x, y+1) && !g.isWall(x, y-1) {
-					gy += float64(g.curr[(y+1)*w+x] - g.curr[(y-1)*w+x])
+					gy += float64(g.field.readCurr(x, y+1) - g.field.readCurr(x, y-1))
 				}
 			}
 		}
@@ -404,7 +651,9 @@ func (g *Game) Draw(screen *ebiten.Image) {
 			img[i*4+3] = 255
 			continue
 		}
-		v := g.curr[i]
+		x := i % w
+		y := i / w
+		v := g.field.readCurr(x, y)
 		v = float32(math.Max(-1, math.Min(1, float64(v))))
 		intensity := byte(math.Abs(float64(v)) * 255)
 		img[i*4] = intensity
@@ -507,19 +756,7 @@ func main() {
 	player, _ := audioCtx.NewPlayer(stream)
 	player.Play()
 
-	g := &Game{
-		curr:          make([]float32, w*h),
-		prev:          make([]float32, w*h),
-		next:          make([]float32, w*h),
-		ex:            float64(w / 2),
-		ey:            float64(h / 2),
-		audioStream:   stream,
-		noiseRand:     rand.New(rand.NewSource(time.Now().UnixNano())),
-		levelRand:     rand.New(rand.NewSource(time.Now().UnixNano() + 1)),
-		walls:         make([]bool, w*h),
-		amplitudeOnly: *amplitudeOnlyFlag,
-	}
-	g.generateWalls()
+	g := newGame(stream, *amplitudeOnlyFlag)
 
 	ebiten.SetWindowSize(w*2, h*2)
 	ebiten.SetWindowTitle("Acoustic Steps with Live Sound")
