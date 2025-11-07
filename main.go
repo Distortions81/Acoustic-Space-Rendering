@@ -14,18 +14,21 @@ import (
 )
 
 const (
-	w, h              = 256, 256
-	damp              = 0.996
-	speed             = 0.5
-	emitterRad        = 3
-	moveSpeed         = 2
-	stepDelay         = 15
-	sampleRate        = 44100
-	defaultTPS        = 60.0
-	simStepsPerSecond = 240.0
-	brownStep         = 0.02
-	ampSmoothing      = 0.15
+	w, h               = 256, 256
+	damp               = 0.996
+	speed              = 0.5
+	emitterRad         = 3
+	moveSpeed          = 2
+	stepDelay          = 15
+	sampleRate         = 44100
+	defaultTPS         = 60.0
+	simStepsPerSecond  = 500.0
+	brownStep          = 0.02
+	ampSmoothing       = 0.15
+	maxAudioLatencySec = 0.12
 )
+
+var maxAudioSamples = int(float64(sampleRate) * maxAudioLatencySec)
 
 type Game struct {
 	curr, prev, next   []float32
