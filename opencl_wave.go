@@ -5,6 +5,7 @@ package main
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"unsafe"
 
 	"github.com/jgillich/go-opencl/cl"
@@ -62,10 +63,14 @@ const waveKernelSource = `__kernel void wave_step(
 func newOpenCLWaveSolver(width, height int) (*openCLWaveSolver, error) {
 	platforms, err := cl.GetPlatforms()
 	if err != nil {
-		return nil, fmt.Errorf("querying OpenCL platforms: %w", err)
+		msg := "querying OpenCL platforms"
+		if strings.Contains(err.Error(), "-1001") {
+			msg += ": no ICD loader reported any platforms; install OpenCL drivers and verify with `clinfo`"
+		}
+		return nil, fmt.Errorf("%s: %w", msg, err)
 	}
 	if len(platforms) == 0 {
-		return nil, errors.New("no OpenCL platforms available")
+		return nil, errors.New("no OpenCL platforms available; ensure a vendor driver is installed and detected by `clinfo`")
 	}
 	var device *cl.Device
 	for _, p := range platforms {
