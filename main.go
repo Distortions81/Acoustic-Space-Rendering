@@ -542,8 +542,25 @@ func (g *Game) Update() error {
 		steps = 1
 	}
 	simStart := time.Now()
-	for i := 0; i < steps; i++ {
-		g.stepWave()
+	if g.gpuSolver != nil {
+		wallsDirty := g.maskDirty
+		if err := g.gpuSolver.Step(g.field, g.walls, steps, wallsDirty); err != nil {
+			log.Printf("OpenCL solver error: %v; falling back to CPU", err)
+			g.gpuSolver.Close()
+			g.gpuSolver = nil
+			g.startWorkers()
+			for i := 0; i < steps; i++ {
+				g.stepWaveCPU()
+			}
+		} else {
+			if wallsDirty {
+				g.rebuildInteriorMask()
+			}
+		}
+	} else {
+		for i := 0; i < steps; i++ {
+			g.stepWaveCPU()
+		}
 	}
 	g.lastSimDuration = time.Since(simStart)
 	g.physicsAccumulator -= float64(steps)
@@ -876,23 +893,6 @@ func (g *Game) castVisibilityRay(x0, y0, x1, y1 int) {
 			y0 += sy
 		}
 	}
-}
-
-func (g *Game) stepWave() {
-	if g.gpuSolver != nil {
-		if err := g.gpuSolver.Step(g.field, g.walls); err != nil {
-			log.Printf("OpenCL solver error: %v; falling back to CPU", err)
-			g.gpuSolver.Close()
-			g.gpuSolver = nil
-			g.startWorkers()
-			g.stepWaveCPU()
-		} else {
-			g.field.zeroBoundaries()
-			g.field.swap()
-		}
-		return
-	}
-	g.stepWaveCPU()
 }
 
 func (g *Game) stepWaveCPU() {
