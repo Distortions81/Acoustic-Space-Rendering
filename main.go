@@ -1,9 +1,11 @@
 package main
 
 import (
+	"encoding/binary"
 	"flag"
 	"fmt"
 	"image/color"
+	"io"
 	"log"
 	"math"
 	"math/rand"
@@ -14,6 +16,7 @@ import (
 	"time"
 
 	"github.com/hajimehoshi/ebiten/v2"
+	"github.com/hajimehoshi/ebiten/v2/audio"
 	"github.com/hajimehoshi/ebiten/v2/ebitenutil"
 	"github.com/hajimehoshi/ebiten/v2/inpututil"
 )
@@ -42,6 +45,10 @@ const (
 	wallExclusionRadius   = 1
 	wallThicknessVariance = 2
 	pgoRecordDuration     = 15 * time.Second
+	audioSampleRate       = 48000
+	audioBufferDuration   = 80 * time.Millisecond
+	pcm16MaxValue         = 32767
+	pcm16MinValue         = -32768
 )
 
 var showWallsFlag = flag.Bool("show-walls", false, "render wall geometry overlays")
@@ -77,6 +84,19 @@ type waveField struct {
 	curr          []float32
 	prev          []float32
 	next          []float32
+}
+
+func defaultPressureSampleIndex(width, height int) int {
+	return (height/2)*width + (width / 2)
+}
+
+func floatToPCM16(v float32) int16 {
+	if v > 1 {
+		v = 1
+	} else if v < -1 {
+		v = -1
+	}
+	return int16(math.Round(float64(v) * float64(pcm16MaxValue)))
 }
 
 func newWaveField(width, height int) *waveField {
@@ -283,60 +303,73 @@ func (g *Game) startWorkers() {
 }
 
 type Game struct {
-	field              *waveField
-	ex, ey             float64
-	stepTimer          int
-	physicsAccumulator float64
-	lastSimDuration    time.Duration
-	simStepMultiplier  int
-	walls              []bool
-	levelRand          *rand.Rand
-	workerCount        int
-	workerMasks        []workerMask
-	maskDirty          bool
-	workerMu           sync.Mutex
-	workerCond         *sync.Cond
-	workerStep         int
-	workerPending      int
-	listenerForwardX   float64
-	listenerForwardY   float64
-	pixelBuf           []byte
-	autoWalk           bool
-	autoWalkDeadline   time.Time
-	autoWalkRand       *rand.Rand
-	autoWalkDirX       float64
-	autoWalkDirY       float64
-	autoWalkFrameCount int
-	visibleStamp       []uint32
-	visibleGen         uint32
+	field                 *waveField
+	ex, ey                float64
+	stepTimer             int
+	physicsAccumulator    float64
+	lastSimDuration       time.Duration
+	simStepMultiplier     int
+	walls                 []bool
+	levelRand             *rand.Rand
+	workerCount           int
+	workerMasks           []workerMask
+	maskDirty             bool
+	workerMu              sync.Mutex
+	workerCond            *sync.Cond
+	workerStep            int
+	workerPending         int
+	listenerForwardX      float64
+	listenerForwardY      float64
+	pixelBuf              []byte
+	latestPressureSamples []int16
+	pressureSampleIndex   int
+	autoWalk              bool
+	autoWalkDeadline      time.Time
+	autoWalkRand          *rand.Rand
+	autoWalkDirX          float64
+	autoWalkDirY          float64
+	autoWalkFrameCount    int
+	visibleStamp          []uint32
+	visibleGen            uint32
 	// cache the last integer listener position used for LOS to avoid recomputing
 	lastVisCX      int
 	lastVisCY      int
 	gpuSolver      *openCLWaveSolver
 	workersStarted bool
+	audioCtx       *audio.Context
+	audioPlayer    *audio.Player
+	audioPipe      *io.PipeWriter
+	audioPCM       []int16
+	audioWriteBuf  []byte
+	audioElapsed   float64
+	audioNextTime  float64
+	audioSampleDur float64
 }
 
 func newGame(workerCount int, enableOpenCL bool) *Game {
 	if workerCount < 1 {
 		workerCount = 1
 	}
+	sampleIndex := defaultPressureSampleIndex(w, h)
 	g := &Game{
-		field:             newWaveField(w, h),
-		ex:                float64(w / 2),
-		ey:                float64(h / 2),
-		levelRand:         rand.New(rand.NewSource(time.Now().UnixNano() + 1)),
-		walls:             make([]bool, w*h),
-		workerCount:       workerCount,
-		maskDirty:         true,
-		listenerForwardX:  0,
-		listenerForwardY:  -1,
-		pixelBuf:          make([]byte, w*h*4),
-		autoWalkRand:      rand.New(rand.NewSource(time.Now().UnixNano() + 2)),
-		simStepMultiplier: defaultSimMultiplier,
+		field:               newWaveField(w, h),
+		ex:                  float64(w / 2),
+		ey:                  float64(h / 2),
+		levelRand:           rand.New(rand.NewSource(time.Now().UnixNano() + 1)),
+		walls:               make([]bool, w*h),
+		workerCount:         workerCount,
+		maskDirty:           true,
+		listenerForwardX:    0,
+		listenerForwardY:    -1,
+		pixelBuf:            make([]byte, w*h*4),
+		autoWalkRand:        rand.New(rand.NewSource(time.Now().UnixNano() + 2)),
+		simStepMultiplier:   defaultSimMultiplier,
+		pressureSampleIndex: sampleIndex,
 	}
 	g.workerCond = sync.NewCond(&g.workerMu)
+	g.initAudio()
 	if enableOpenCL {
-		if solver, err := newOpenCLWaveSolver(w, h); err != nil {
+		if solver, err := newOpenCLWaveSolver(w, h, sampleIndex); err != nil {
 			log.Printf("OpenCL initialization failed: %v", err)
 		} else {
 			log.Printf("OpenCL solver enabled (device: %s)", solver.DeviceName())
@@ -350,6 +383,145 @@ func newGame(workerCount int, enableOpenCL bool) *Game {
 	g.rebuildInteriorMask()
 	g.lastVisCX, g.lastVisCY = -1, -1
 	return g
+}
+
+func (g *Game) ensurePressureSampleCapacity(n int) {
+	if n <= 0 {
+		if g.latestPressureSamples != nil {
+			g.latestPressureSamples = g.latestPressureSamples[:0]
+		}
+		return
+	}
+	if cap(g.latestPressureSamples) < n {
+		g.latestPressureSamples = make([]int16, n)
+	} else {
+		g.latestPressureSamples = g.latestPressureSamples[:n]
+	}
+}
+
+func (g *Game) setPressureSamples(samples []int16) {
+	g.ensurePressureSampleCapacity(len(samples))
+	copy(g.latestPressureSamples, samples)
+}
+
+func (g *Game) initAudio() {
+	g.audioSampleDur = 1.0 / float64(audioSampleRate)
+	ctx := audio.CurrentContext()
+	if ctx == nil {
+		ctx = audio.NewContext(audioSampleRate)
+	} else if ctx.SampleRate() != audioSampleRate {
+		log.Printf("audio context sample rate %d does not match expected %d; disabling audio", ctx.SampleRate(), audioSampleRate)
+		return
+	}
+	pr, pw := io.Pipe()
+	player, err := ctx.NewPlayer(pr)
+	if err != nil {
+		log.Printf("creating audio player failed: %v", err)
+		_ = pr.Close()
+		_ = pw.Close()
+		return
+	}
+	player.SetBufferSize(audioBufferDuration)
+	g.audioCtx = ctx
+	g.audioPlayer = player
+	g.audioPipe = pw
+	g.audioElapsed = 0
+	g.audioNextTime = 0
+	g.audioPCM = g.audioPCM[:0]
+	player.Play()
+}
+
+func (g *Game) flushAudioBuffer() {
+	if len(g.audioPCM) == 0 {
+		return
+	}
+	if g.audioPipe == nil {
+		g.audioPCM = g.audioPCM[:0]
+		return
+	}
+	byteLen := len(g.audioPCM) * 2
+	if cap(g.audioWriteBuf) < byteLen {
+		g.audioWriteBuf = make([]byte, byteLen)
+	}
+	buf := g.audioWriteBuf[:byteLen]
+	for i, sample := range g.audioPCM {
+		binary.LittleEndian.PutUint16(buf[i*2:], uint16(sample))
+	}
+	if _, err := g.audioPipe.Write(buf); err != nil {
+		log.Printf("audio stream write failed: %v", err)
+		_ = g.audioPipe.Close()
+		g.audioPipe = nil
+	} else if g.audioPlayer != nil && !g.audioPlayer.IsPlaying() {
+		g.audioPlayer.Play()
+	}
+	g.audioPCM = g.audioPCM[:0]
+}
+
+func (g *Game) streamAudioSamples(samples []int16, sourceRate float64) {
+	if sourceRate <= 0 {
+		sourceRate = float64(audioSampleRate)
+	}
+	chunkDuration := 0.0
+	if len(samples) > 0 {
+		chunkDuration = float64(len(samples)) / sourceRate
+	}
+	chunkStart := g.audioElapsed
+	chunkEnd := chunkStart + chunkDuration
+	if len(samples) == 0 {
+		g.audioElapsed = chunkEnd
+		if g.audioNextTime < g.audioElapsed {
+			g.audioNextTime = g.audioElapsed
+		}
+		return
+	}
+	if g.audioNextTime < chunkStart {
+		g.audioNextTime = chunkStart
+	}
+	g.audioPCM = g.audioPCM[:0]
+	for g.audioNextTime < chunkEnd {
+		relTime := g.audioNextTime - chunkStart
+		srcPos := relTime * sourceRate
+		idx := int(srcPos)
+		if idx < 0 {
+			idx = 0
+		}
+		if idx >= len(samples) {
+			idx = len(samples) - 1
+		}
+		sample := float64(samples[idx])
+		if idx+1 < len(samples) {
+			frac := srcPos - float64(idx)
+			nextSample := float64(samples[idx+1])
+			sample += (nextSample - sample) * frac
+		}
+		if sample > pcm16MaxValue {
+			sample = pcm16MaxValue
+		} else if sample < pcm16MinValue {
+			sample = pcm16MinValue
+		}
+		v := int16(math.Round(sample))
+		g.audioPCM = append(g.audioPCM, v, v)
+		g.audioNextTime += g.audioSampleDur
+	}
+	g.audioElapsed = chunkEnd
+	if g.audioPipe == nil {
+		g.audioPCM = g.audioPCM[:0]
+		if g.audioNextTime < g.audioElapsed {
+			g.audioNextTime = g.audioElapsed
+		}
+		return
+	}
+	g.flushAudioBuffer()
+	if g.audioNextTime < g.audioElapsed {
+		g.audioNextTime = g.audioElapsed
+	}
+}
+
+func (g *Game) samplePressureAtIndex() int16 {
+	if g.pressureSampleIndex < 0 || g.pressureSampleIndex >= len(g.field.curr) {
+		return 0
+	}
+	return floatToPCM16(g.field.curr[g.pressureSampleIndex])
 }
 
 func (g *Game) rebuildInteriorMask() {
@@ -542,28 +714,33 @@ func (g *Game) Update() error {
 		steps = 1
 	}
 	simStart := time.Now()
+	var producedSamples []int16
 	if g.gpuSolver != nil {
 		wallsDirty := g.maskDirty
-		if err := g.gpuSolver.Step(g.field, g.walls, steps, wallsDirty); err != nil {
+		samples, err := g.gpuSolver.Step(g.field, g.walls, steps, wallsDirty)
+		if err != nil {
 			log.Printf("OpenCL solver error: %v; falling back to CPU", err)
 			g.gpuSolver.Close()
 			g.gpuSolver = nil
 			g.startWorkers()
-			for i := 0; i < steps; i++ {
-				g.stepWaveCPU()
-			}
+			g.stepWaveCPUBatch(steps)
 		} else {
 			if wallsDirty {
 				g.rebuildInteriorMask()
 			}
+			g.setPressureSamples(samples)
 		}
 	} else {
-		for i := 0; i < steps; i++ {
-			g.stepWaveCPU()
-		}
+		g.stepWaveCPUBatch(steps)
 	}
+	producedSamples = g.latestPressureSamples
 	g.lastSimDuration = time.Since(simStart)
 	g.physicsAccumulator -= float64(steps)
+
+	if producedSamples != nil {
+		sourceRate := float64(steps) * actualTPS
+		g.streamAudioSamples(producedSamples, sourceRate)
+	}
 
 	// Keep LOS visibility mask updated here to avoid work in Draw.
 	if *occludeLineOfSightFlag {
@@ -907,6 +1084,18 @@ func (g *Game) stepWaveCPU() {
 	g.workerMu.Unlock()
 	g.field.zeroBoundaries()
 	g.field.swap()
+}
+
+func (g *Game) stepWaveCPUBatch(steps int) {
+	if steps <= 0 {
+		g.ensurePressureSampleCapacity(0)
+		return
+	}
+	g.ensurePressureSampleCapacity(steps)
+	for i := 0; i < steps; i++ {
+		g.stepWaveCPU()
+		g.latestPressureSamples[i] = g.samplePressureAtIndex()
+	}
 }
 
 func (g *Game) Draw(screen *ebiten.Image) {
