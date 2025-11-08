@@ -21,7 +21,7 @@ import (
 const (
 	w, h                  = 1024, 1024
 	windowScale           = 1
-	damp                  = 0.999
+	damp                  = 0.9995
 	speed                 = 0.5
 	waveDamp32            = float32(damp)
 	waveSpeed32           = float32(speed)
@@ -29,10 +29,10 @@ const (
 	moveSpeed             = 2
 	stepDelay             = 60 / 4
 	defaultTPS            = 60.0
-	defaultSimMultiplier  = 10
-	simMultiplierStep     = 1
+	defaultSimMultiplier  = 370
+	simMultiplierStep     = 10
 	minSimMultiplier      = 1
-	maxSimMultiplier      = 50
+	maxSimMultiplier      = 1000
 	earOffsetCells        = 5
 	boundaryReflect       = 0.60
 	stepImpulseStrength   = 10
