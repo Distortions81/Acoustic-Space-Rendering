@@ -59,7 +59,8 @@ func (f *waveField) swap() {
 	f.prev, f.curr, f.next = f.curr, f.next, f.prev
 }
 
-// zeroBoundaries applies the reflective boundary conditions on the edges of the grid.
+// zeroBoundaries applies absorbing boundary conditions on the edges of the grid
+// to prevent reflections back into the simulation domain.
 func (f *waveField) zeroBoundaries() {
 	lastRow := f.height - 1
 	lastCol := f.width - 1

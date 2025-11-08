@@ -21,7 +21,7 @@ const (
 	minSimMultiplier      = 1
 	maxSimMultiplier      = 1000
 	earOffsetCells        = 5
-	boundaryReflect       = 0.3
+	boundaryReflect       = 0.0
 	stepImpulseStrength   = 1.0
 	wallSegments          = 40
 	wallMinLen            = 12
