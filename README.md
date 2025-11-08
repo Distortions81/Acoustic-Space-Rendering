@@ -49,6 +49,12 @@ If `clinfo` lists at least one platform, you are ready to build with the `opencl
 go build -tags opencl ./...
 ```
 
+### Troubleshooting OpenCL startup errors
+
+If the runtime prints `OpenCL initialization failed: querying OpenCL platforms: cl: error -1001`, no ICD loader reported any
+available platforms. Install the OpenCL packages from step 3 and your GPU vendor's driver, then rerun `clinfo` to confirm a
+platform is detected before launching the application.
+
 ## Building the project
 
 Once dependencies are installed, install Go (if not already available) and build the project:
