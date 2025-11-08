@@ -22,10 +22,10 @@ const (
 	maxSimMultiplier       = 1000
 	earOffsetCells         = 5
 	defaultBoundaryReflect = 0.4
-	stepImpulseStrength    = 25.0
+	stepImpulseStrength    = 10.0
 	wallSegments           = 40
 	wallMinLen             = 12
-	wallMaxLen             = 100
+	wallMaxLen             = 300
 	wallExclusionRadius    = 1
 	wallThicknessVariance  = 5
 	pgoRecordDuration      = 15 * time.Second
