@@ -7,7 +7,7 @@ import "time"
 // the acoustic wave simulation.
 const (
 	w, h                   = 1024, 1024
-	windowScale            = 2
+	windowScale            = 1
 	damp                   = 0.9994
 	speed                  = 0.5
 	waveDamp32             = float32(damp)
@@ -24,7 +24,7 @@ const (
 	defaultBoundaryReflect = 0.4
 	stepImpulseStrength    = 10.0
 	wallSegments           = 40
-	wallMinLen             = 12
+	wallMinLen             = 12ss
 	wallMaxLen             = 300
 	wallExclusionRadius    = 1
 	wallThicknessVariance  = 5
