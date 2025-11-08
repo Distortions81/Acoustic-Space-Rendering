@@ -79,6 +79,19 @@ type waveField struct {
 	next          []float32
 }
 
+func defaultPressureSampleIndex(width, height int) int {
+	return (height/2)*width + (width / 2)
+}
+
+func floatToPCM16(v float32) int16 {
+	if v > 1 {
+		v = 1
+	} else if v < -1 {
+		v = -1
+	}
+	return int16(math.Round(float64(v) * 32767))
+}
+
 func newWaveField(width, height int) *waveField {
 	return &waveField{
 		width: width, height: height,
@@ -283,32 +296,34 @@ func (g *Game) startWorkers() {
 }
 
 type Game struct {
-	field              *waveField
-	ex, ey             float64
-	stepTimer          int
-	physicsAccumulator float64
-	lastSimDuration    time.Duration
-	simStepMultiplier  int
-	walls              []bool
-	levelRand          *rand.Rand
-	workerCount        int
-	workerMasks        []workerMask
-	maskDirty          bool
-	workerMu           sync.Mutex
-	workerCond         *sync.Cond
-	workerStep         int
-	workerPending      int
-	listenerForwardX   float64
-	listenerForwardY   float64
-	pixelBuf           []byte
-	autoWalk           bool
-	autoWalkDeadline   time.Time
-	autoWalkRand       *rand.Rand
-	autoWalkDirX       float64
-	autoWalkDirY       float64
-	autoWalkFrameCount int
-	visibleStamp       []uint32
-	visibleGen         uint32
+	field                 *waveField
+	ex, ey                float64
+	stepTimer             int
+	physicsAccumulator    float64
+	lastSimDuration       time.Duration
+	simStepMultiplier     int
+	walls                 []bool
+	levelRand             *rand.Rand
+	workerCount           int
+	workerMasks           []workerMask
+	maskDirty             bool
+	workerMu              sync.Mutex
+	workerCond            *sync.Cond
+	workerStep            int
+	workerPending         int
+	listenerForwardX      float64
+	listenerForwardY      float64
+	pixelBuf              []byte
+	latestPressureSamples []int16
+	pressureSampleIndex   int
+	autoWalk              bool
+	autoWalkDeadline      time.Time
+	autoWalkRand          *rand.Rand
+	autoWalkDirX          float64
+	autoWalkDirY          float64
+	autoWalkFrameCount    int
+	visibleStamp          []uint32
+	visibleGen            uint32
 	// cache the last integer listener position used for LOS to avoid recomputing
 	lastVisCX      int
 	lastVisCY      int
@@ -320,23 +335,25 @@ func newGame(workerCount int, enableOpenCL bool) *Game {
 	if workerCount < 1 {
 		workerCount = 1
 	}
+	sampleIndex := defaultPressureSampleIndex(w, h)
 	g := &Game{
-		field:             newWaveField(w, h),
-		ex:                float64(w / 2),
-		ey:                float64(h / 2),
-		levelRand:         rand.New(rand.NewSource(time.Now().UnixNano() + 1)),
-		walls:             make([]bool, w*h),
-		workerCount:       workerCount,
-		maskDirty:         true,
-		listenerForwardX:  0,
-		listenerForwardY:  -1,
-		pixelBuf:          make([]byte, w*h*4),
-		autoWalkRand:      rand.New(rand.NewSource(time.Now().UnixNano() + 2)),
-		simStepMultiplier: defaultSimMultiplier,
+		field:               newWaveField(w, h),
+		ex:                  float64(w / 2),
+		ey:                  float64(h / 2),
+		levelRand:           rand.New(rand.NewSource(time.Now().UnixNano() + 1)),
+		walls:               make([]bool, w*h),
+		workerCount:         workerCount,
+		maskDirty:           true,
+		listenerForwardX:    0,
+		listenerForwardY:    -1,
+		pixelBuf:            make([]byte, w*h*4),
+		autoWalkRand:        rand.New(rand.NewSource(time.Now().UnixNano() + 2)),
+		simStepMultiplier:   defaultSimMultiplier,
+		pressureSampleIndex: sampleIndex,
 	}
 	g.workerCond = sync.NewCond(&g.workerMu)
 	if enableOpenCL {
-		if solver, err := newOpenCLWaveSolver(w, h); err != nil {
+		if solver, err := newOpenCLWaveSolver(w, h, sampleIndex); err != nil {
 			log.Printf("OpenCL initialization failed: %v", err)
 		} else {
 			log.Printf("OpenCL solver enabled (device: %s)", solver.DeviceName())
@@ -350,6 +367,32 @@ func newGame(workerCount int, enableOpenCL bool) *Game {
 	g.rebuildInteriorMask()
 	g.lastVisCX, g.lastVisCY = -1, -1
 	return g
+}
+
+func (g *Game) ensurePressureSampleCapacity(n int) {
+	if n <= 0 {
+		if g.latestPressureSamples != nil {
+			g.latestPressureSamples = g.latestPressureSamples[:0]
+		}
+		return
+	}
+	if cap(g.latestPressureSamples) < n {
+		g.latestPressureSamples = make([]int16, n)
+	} else {
+		g.latestPressureSamples = g.latestPressureSamples[:n]
+	}
+}
+
+func (g *Game) setPressureSamples(samples []int16) {
+	g.ensurePressureSampleCapacity(len(samples))
+	copy(g.latestPressureSamples, samples)
+}
+
+func (g *Game) samplePressureAtIndex() int16 {
+	if g.pressureSampleIndex < 0 || g.pressureSampleIndex >= len(g.field.curr) {
+		return 0
+	}
+	return floatToPCM16(g.field.curr[g.pressureSampleIndex])
 }
 
 func (g *Game) rebuildInteriorMask() {
@@ -544,23 +587,21 @@ func (g *Game) Update() error {
 	simStart := time.Now()
 	if g.gpuSolver != nil {
 		wallsDirty := g.maskDirty
-		if err := g.gpuSolver.Step(g.field, g.walls, steps, wallsDirty); err != nil {
+		samples, err := g.gpuSolver.Step(g.field, g.walls, steps, wallsDirty)
+		if err != nil {
 			log.Printf("OpenCL solver error: %v; falling back to CPU", err)
 			g.gpuSolver.Close()
 			g.gpuSolver = nil
 			g.startWorkers()
-			for i := 0; i < steps; i++ {
-				g.stepWaveCPU()
-			}
+			g.stepWaveCPUBatch(steps)
 		} else {
 			if wallsDirty {
 				g.rebuildInteriorMask()
 			}
+			g.setPressureSamples(samples)
 		}
 	} else {
-		for i := 0; i < steps; i++ {
-			g.stepWaveCPU()
-		}
+		g.stepWaveCPUBatch(steps)
 	}
 	g.lastSimDuration = time.Since(simStart)
 	g.physicsAccumulator -= float64(steps)
@@ -907,6 +948,18 @@ func (g *Game) stepWaveCPU() {
 	g.workerMu.Unlock()
 	g.field.zeroBoundaries()
 	g.field.swap()
+}
+
+func (g *Game) stepWaveCPUBatch(steps int) {
+	if steps <= 0 {
+		g.ensurePressureSampleCapacity(0)
+		return
+	}
+	g.ensurePressureSampleCapacity(steps)
+	for i := 0; i < steps; i++ {
+		g.stepWaveCPU()
+		g.latestPressureSamples[i] = g.samplePressureAtIndex()
+	}
 }
 
 func (g *Game) Draw(screen *ebiten.Image) {
