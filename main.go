@@ -62,44 +62,35 @@ func buildLOSPerimeterTargets() []intPoint {
 	return points
 }
 
-type wavePlane [][]float32
-
 type waveField struct {
-	width, height int
-	curr          wavePlane
-	prev          wavePlane
-	next          wavePlane
+    width, height int
+    curr          []float32
+    prev          []float32
+    next          []float32
 }
 
 func newWaveField(width, height int) *waveField {
-	return &waveField{
-		width: width, height: height,
-		curr: makePlane(width, height),
-		prev: makePlane(width, height),
-		next: makePlane(width, height),
-	}
-}
-
-func makePlane(width, height int) wavePlane {
-	p := make(wavePlane, height)
-	for y := range p {
-		p[y] = make([]float32, width)
-	}
-	return p
+    return &waveField{
+        width: width, height: height,
+        curr: make([]float32, width*height),
+        prev: make([]float32, width*height),
+        next: make([]float32, width*height),
+    }
 }
 
 func (f *waveField) setCurr(x, y int, value float32) {
-	f.curr[y][x] = value
+    f.curr[y*f.width+x] = value
 }
 
 func (f *waveField) zeroCell(x, y int) {
-	f.curr[y][x] = 0
-	f.prev[y][x] = 0
-	f.next[y][x] = 0
+    idx := y*f.width + x
+    f.curr[idx] = 0
+    f.prev[idx] = 0
+    f.next[idx] = 0
 }
 
 func (f *waveField) readCurr(x, y int) float32 {
-	return f.curr[y][x]
+    return f.curr[y*f.width+x]
 }
 
 func (f *waveField) swap() {
@@ -107,26 +98,30 @@ func (f *waveField) swap() {
 }
 
 func (f *waveField) zeroBoundaries() {
-	lastRow := f.height - 1
-	lastCol := f.width - 1
-	reflect := float32(boundaryReflect)
-	for x := 0; x < f.width; x++ {
-		top := f.next[1][x]
-		bottom := f.next[lastRow-1][x]
-		f.next[0][x] = -top * reflect
-		f.next[lastRow][x] = -bottom * reflect
-	}
-	for y := 1; y < lastRow; y++ {
-		left := f.next[y][1]
-		right := f.next[y][lastCol-1]
-		f.next[y][0] = -left * reflect
-		f.next[y][lastCol] = -right * reflect
-	}
+    lastRow := f.height - 1
+    lastCol := f.width - 1
+    reflect := float32(boundaryReflect)
+    // Top and bottom rows
+    for x := 0; x < f.width; x++ {
+        top := f.next[1*f.width+x]
+        bottom := f.next[(lastRow-1)*f.width+x]
+        f.next[0*f.width+x] = -top * reflect
+        f.next[lastRow*f.width+x] = -bottom * reflect
+    }
+    // Left and right columns
+    for y := 1; y < lastRow; y++ {
+        left := f.next[y*f.width+1]
+        right := f.next[y*f.width+lastCol-1]
+        f.next[y*f.width+0] = -left * reflect
+        f.next[y*f.width+lastCol] = -right * reflect
+    }
 }
 
+type span struct { start, end int } // inclusive [start,end]
+
 type rowMask struct {
-	y  int
-	xs []int
+    y     int
+    spans []span
 }
 
 type workerMask struct {
@@ -141,12 +136,12 @@ type rowCache struct {
 }
 
 func newRowCache(width int) *rowCache {
-	return &rowCache{
-		center: make([]float32, width),
-		prev:   make([]float32, width),
-		top:    make([]float32, width),
-		bottom: make([]float32, width),
-	}
+    return &rowCache{
+        center: make([]float32, width),
+        prev:   make([]float32, width),
+        top:    make([]float32, width),
+        bottom: make([]float32, width),
+    }
 }
 
 func (g *Game) waveWorkerLoop(index int) {
@@ -176,24 +171,69 @@ func (g *Game) waveWorkerLoop(index int) {
 	}
 }
 
-func processMask(field *waveField, mask *workerMask, cache *rowCache) {
-	for _, row := range mask.rows {
-		y := row.y
-		convertRow(field.curr[y], cache.center)
-		convertRow(field.prev[y], cache.prev)
-		convertRow(field.curr[y-1], cache.top)
-		convertRow(field.curr[y+1], cache.bottom)
+func processMask(field *waveField, mask *workerMask, _ *rowCache) {
+    // Compute directly from flat slices and contiguous spans.
+    // Inner loops are written in fixed-stride form to encourage auto-vectorization.
+    width := field.width
+    wd := waveDamp32
+    ws := waveSpeed32
+    for _, row := range mask.rows {
+        y := row.y
+        rowBase := y * width
+        topBase := (y - 1) * width
+        bottomBase := (y + 1) * width
+        // set row boundary guard values; main boundary reflection still applied separately
+        field.next[rowBase+0] = 0
+        field.next[rowBase+width-1] = 0
 
-		nextRow := field.next[y]
-		nextRow[0] = 0
-		nextRow[len(nextRow)-1] = 0
-		for _, x := range row.xs {
-			lap := cache.center[x-1] + cache.center[x+1] + cache.top[x] + cache.bottom[x] - 4*cache.center[x]
-			val := (2*cache.center[x] - cache.prev[x]) + waveSpeed32*lap
-			val *= waveDamp32
-			nextRow[x] = val
-		}
-	}
+        // Pre-slice rows to help bounds-check elimination
+        center := field.curr[rowBase : rowBase+width]
+        prev := field.prev[rowBase : rowBase+width]
+        top := field.curr[topBase : topBase+width]
+        bottom := field.curr[bottomBase : bottomBase+width]
+        nextRow := field.next[rowBase : rowBase+width]
+
+        for _, sp := range row.spans {
+            // clamp spans to interior just in case
+            start := sp.start
+            if start < 1 { start = 1 }
+            end := sp.end
+            if end > width-2 { end = width-2 }
+
+            // 4-wide unrolled loop
+            x := start
+            for ; x+3 <= end; x += 4 {
+                // lane 0
+                c0 := center[x]
+                lap0 := center[x-1] + center[x+1] + top[x] + bottom[x] - 4*c0
+                nextRow[x] = ((2*c0 - prev[x]) + ws*lap0) * wd
+
+                // lane 1
+                x1 := x + 1
+                c1 := center[x1]
+                lap1 := center[x1-1] + center[x1+1] + top[x1] + bottom[x1] - 4*c1
+                nextRow[x1] = ((2*c1 - prev[x1]) + ws*lap1) * wd
+
+                // lane 2
+                x2 := x + 2
+                c2 := center[x2]
+                lap2 := center[x2-1] + center[x2+1] + top[x2] + bottom[x2] - 4*c2
+                nextRow[x2] = ((2*c2 - prev[x2]) + ws*lap2) * wd
+
+                // lane 3
+                x3 := x + 3
+                c3 := center[x3]
+                lap3 := center[x3-1] + center[x3+1] + top[x3] + bottom[x3] - 4*c3
+                nextRow[x3] = ((2*c3 - prev[x3]) + ws*lap3) * wd
+            }
+            // tail
+            for ; x <= end; x++ {
+                c := center[x]
+                lap := center[x-1] + center[x+1] + top[x] + bottom[x] - 4*c
+                nextRow[x] = ((2*c - prev[x]) + ws*lap) * wd
+            }
+        }
+    }
 }
 
 func convertRow(src []float32, dst []float32) {
@@ -235,7 +275,10 @@ type Game struct {
 	autoWalkDirX       float64
 	autoWalkDirY       float64
 	autoWalkFrameCount int
-	visibleMask        []bool
+    visibleMask        []bool
+    // cache the last integer listener position used for LOS to avoid recomputing
+    lastVisCX          int
+    lastVisCY          int
 }
 
 func newGame() *Game {
@@ -260,32 +303,44 @@ func newGame() *Game {
 	for i := 0; i < workerCount; i++ {
 		go g.waveWorkerLoop(i)
 	}
-	g.generateWalls()
-	g.rebuildInteriorMask()
-	return g
+    g.generateWalls()
+    g.rebuildInteriorMask()
+    g.lastVisCX, g.lastVisCY = -1, -1
+    return g
 }
 
 func (g *Game) rebuildInteriorMask() {
-	if g.workerCount < 1 {
-		g.workerCount = 1
-	}
-	rows := make([]rowMask, 0, h-2)
-	for y := 1; y < h-1; y++ {
-		base := y * w
-		xs := make([]int, 0, w-2)
-		for x := 1; x < w-1; x++ {
-			if g.walls[base+x] {
-				continue
-			}
-			xs = append(xs, x)
-		}
-		if len(xs) == 0 {
-			continue
-		}
-		rows = append(rows, rowMask{y: y, xs: xs})
-	}
-	g.workerMasks = assignRowMasks(g.workerCount, rows)
-	g.maskDirty = false
+    if g.workerCount < 1 {
+        g.workerCount = 1
+    }
+    rows := make([]rowMask, 0, h-2)
+    for y := 1; y < h-1; y++ {
+        base := y * w
+        spans := make([]span, 0, 8)
+        in := false
+        start := 0
+        for x := 1; x < w-1; x++ {
+            blocked := g.walls[base+x]
+            if !blocked && !in {
+                in = true
+                start = x
+            }
+            if (blocked || x == w-2) && in {
+                end := x - 1
+                if x == w-2 && !blocked { end = x }
+                if end >= start {
+                    spans = append(spans, span{start: start, end: end})
+                }
+                in = false
+            }
+        }
+        if len(spans) == 0 {
+            continue
+        }
+        rows = append(rows, rowMask{y: y, spans: spans})
+    }
+    g.workerMasks = assignRowMasks(g.workerCount, rows)
+    g.maskDirty = false
 }
 
 func (g *Game) ensureInteriorMask() {
@@ -419,6 +474,11 @@ func (g *Game) Update() error {
 	}
 	g.physicsAccumulator -= float64(steps)
 
+	// Keep LOS visibility mask updated here to avoid work in Draw.
+	if *occludeLineOfSightFlag {
+		g.refreshVisibleMask()
+	}
+
 	return nil
 }
 
@@ -465,7 +525,9 @@ func (g *Game) generateWalls() {
 			cy += dy
 		}
 	}
-	g.maskDirty = true
+    g.maskDirty = true
+    // force LOS recomputation next draw
+    g.lastVisCX, g.lastVisCY = -1, -1
 }
 
 func (g *Game) trySetWall(x, y int) {
@@ -536,18 +598,23 @@ func clampCoord(v, min, max int) int {
 }
 
 func (g *Game) refreshVisibleMask() {
-	if len(g.visibleMask) != w*h {
-		g.visibleMask = make([]bool, w*h)
-	}
-	for i := range g.visibleMask {
-		g.visibleMask[i] = false
-	}
-	cx := clampCoord(int(math.Round(g.ex)), 0, w-1)
-	cy := clampCoord(int(math.Round(g.ey)), 0, h-1)
-	g.visibleMask[cy*w+cx] = true
-	for _, target := range losPerimeterTargets {
-		g.castVisibilityRay(cx, cy, target.x, target.y)
-	}
+    if len(g.visibleMask) != w*h {
+        g.visibleMask = make([]bool, w*h)
+    }
+    cx := clampCoord(int(math.Round(g.ex)), 0, w-1)
+    cy := clampCoord(int(math.Round(g.ey)), 0, h-1)
+    // If the integer listener position hasn't changed, keep prior mask
+    if g.lastVisCX == cx && g.lastVisCY == cy {
+        return
+    }
+    for i := range g.visibleMask {
+        g.visibleMask[i] = false
+    }
+    g.visibleMask[cy*w+cx] = true
+    for _, target := range losPerimeterTargets {
+        g.castVisibilityRay(cx, cy, target.x, target.y)
+    }
+    g.lastVisCX, g.lastVisCY = cx, cy
 }
 
 func (g *Game) castVisibilityRay(x0, y0, x1, y1 int) {
@@ -601,15 +668,12 @@ func (g *Game) stepWave() {
 }
 
 func (g *Game) Draw(screen *ebiten.Image) {
-	if len(g.pixelBuf) != w*h*4 {
-		g.pixelBuf = make([]byte, w*h*4)
-	}
-	img := g.pixelBuf
-	showWalls := *showWallsFlag
-	occludeLOS := *occludeLineOfSightFlag
-	if occludeLOS {
-		g.refreshVisibleMask()
-	}
+    if len(g.pixelBuf) != w*h*4 {
+        g.pixelBuf = make([]byte, w*h*4)
+    }
+    img := g.pixelBuf
+    showWalls := *showWallsFlag
+    occludeLOS := *occludeLineOfSightFlag
 	for i := 0; i < w*h; i++ {
 		base := i * 4
 		if occludeLOS && (len(g.visibleMask) == w*h) && !g.visibleMask[i] {
