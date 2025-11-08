@@ -31,8 +31,10 @@ type openCLWaveSolver struct {
 	deviceName        string
 	sampleIndex       int
 	sampleOffset      int
-	sampleScratch     []float32
 	sampleBuffer      []int16
+	sampleScratch     []float32
+	sampleDeviceBuf   *cl.MemObject
+	sampleDeviceCap   int
 }
 
 const waveKernelSource = `__kernel void wave_step(
@@ -284,7 +286,6 @@ func newOpenCLWaveSolver(width, height int, sampleIndex int) (*openCLWaveSolver,
 		deviceName:        device.Name(),
 		sampleIndex:       sampleIndex,
 		sampleOffset:      sampleOffset,
-		sampleScratch:     make([]float32, 1),
 	}
 
 	if err := solver.kernel.SetArgs(
@@ -365,6 +366,44 @@ func (s *openCLWaveSolver) ensureSampleBuffer(steps int) []int16 {
 	return s.sampleBuffer
 }
 
+func (s *openCLWaveSolver) ensureSampleScratch(steps int) []float32 {
+	if steps <= 0 {
+		if s.sampleScratch != nil {
+			s.sampleScratch = s.sampleScratch[:0]
+			return s.sampleScratch
+		}
+		return nil
+	}
+	if cap(s.sampleScratch) < steps {
+		s.sampleScratch = make([]float32, steps)
+	} else {
+		s.sampleScratch = s.sampleScratch[:steps]
+	}
+	return s.sampleScratch
+}
+
+func (s *openCLWaveSolver) ensureSampleDeviceBuffer(steps int) error {
+	if steps <= 0 {
+		return nil
+	}
+	if steps <= s.sampleDeviceCap {
+		return nil
+	}
+	if s.sampleDeviceBuf != nil {
+		s.sampleDeviceBuf.Release()
+		s.sampleDeviceBuf = nil
+		s.sampleDeviceCap = 0
+	}
+	byteSize := steps * int(unsafe.Sizeof(float32(0)))
+	buf, err := s.context.CreateEmptyBuffer(cl.MemReadWrite, byteSize)
+	if err != nil {
+		return fmt.Errorf("allocating sample buffer: %w", err)
+	}
+	s.sampleDeviceBuf = buf
+	s.sampleDeviceCap = steps
+	return nil
+}
+
 func (s *openCLWaveSolver) bindDynamicBuffers() error {
 	if err := s.kernel.SetArgBuffer(4, s.currBuf); err != nil {
 		return err
@@ -427,6 +466,11 @@ func (s *openCLWaveSolver) Step(field *waveField, walls []bool, steps int, walls
 	}
 	global := []int{size}
 	samples := s.ensureSampleBuffer(steps)
+	if err := s.ensureSampleDeviceBuffer(steps); err != nil {
+		return nil, err
+	}
+	floatScratch := s.ensureSampleScratch(steps)
+	floatSize := int(unsafe.Sizeof(float32(0)))
 	for step := 0; step < steps; step++ {
 		if _, err := s.queue.EnqueueNDRangeKernel(s.kernel, nil, global, nil, nil); err != nil {
 			return nil, fmt.Errorf("enqueueing kernel: %w", err)
@@ -450,10 +494,15 @@ func (s *openCLWaveSolver) Step(field *waveField, walls []bool, steps int, walls
 		if err := s.bindDynamicBuffers(); err != nil {
 			return nil, fmt.Errorf("updating buffers: %w", err)
 		}
-		if _, err := s.queue.EnqueueReadBufferFloat32(s.currBuf, true, s.sampleOffset, s.sampleScratch, nil); err != nil {
-			return nil, fmt.Errorf("reading sample value: %w", err)
+		if _, err := s.queue.EnqueueCopyBuffer(s.currBuf, s.sampleDeviceBuf, s.sampleOffset, step*floatSize, floatSize, nil); err != nil {
+			return nil, fmt.Errorf("copying sample value: %w", err)
 		}
-		samples[step] = floatToPCM16(s.sampleScratch[0])
+	}
+	if _, err := s.queue.EnqueueReadBufferFloat32(s.sampleDeviceBuf, true, 0, floatScratch, nil); err != nil {
+		return nil, fmt.Errorf("reading sample buffer: %w", err)
+	}
+	for i := range samples {
+		samples[i] = floatToPCM16(floatScratch[i])
 	}
 	if _, err := s.queue.EnqueueReadBufferFloat32(s.currBuf, true, 0, field.curr, nil); err != nil {
 		return nil, fmt.Errorf("reading current buffer: %w", err)
@@ -499,6 +548,11 @@ func (s *openCLWaveSolver) Close() {
 	if s.boundaryColKernel != nil {
 		s.boundaryColKernel.Release()
 		s.boundaryColKernel = nil
+	}
+	if s.sampleDeviceBuf != nil {
+		s.sampleDeviceBuf.Release()
+		s.sampleDeviceBuf = nil
+		s.sampleDeviceCap = 0
 	}
 	if s.program != nil {
 		s.program.Release()
