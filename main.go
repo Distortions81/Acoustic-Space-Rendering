@@ -21,7 +21,7 @@ import (
 const (
 	w, h                  = 1024, 1024
 	windowScale           = 1
-	damp                  = 0.996
+	damp                  = 0.999
 	speed                 = 0.5
 	waveDamp32            = float32(damp)
 	waveSpeed32           = float32(speed)
@@ -29,7 +29,7 @@ const (
 	moveSpeed             = 2
 	stepDelay             = 60 / 4
 	defaultTPS            = 60.0
-	defaultSimMultiplier  = 1
+	defaultSimMultiplier  = 10
 	simMultiplierStep     = 1
 	minSimMultiplier      = 1
 	maxSimMultiplier      = 50
@@ -50,7 +50,7 @@ var occludeLineOfSightFlag = flag.Bool("occlude-line-of-sight", true, "hide regi
 var fovDegreesFlag = flag.Float64("fov-deg", 90.0, "field of view angle for LOS (degrees)")
 var threadCountFlag = flag.Int("threads", 0, "number of worker threads; 0 auto-detects")
 var debugFlag = flag.Bool("debug", false, "show FPS and simulation speed overlay")
-var useOpenCLFlag = flag.Bool("use-opencl", false, "attempt to run the wave simulation via OpenCL (build with -tags opencl)")
+var useOpenCLFlag = flag.Bool("use-opencl", true, "attempt to run the wave simulation via OpenCL (build with -tags opencl)")
 
 type intPoint struct {
 	x int
