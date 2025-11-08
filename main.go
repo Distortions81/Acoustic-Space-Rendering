@@ -2,6 +2,7 @@ package main
 
 import (
 	"flag"
+	"fmt"
 	"image/color"
 	"log"
 	"math"
@@ -13,6 +14,8 @@ import (
 	"time"
 
 	"github.com/hajimehoshi/ebiten/v2"
+	"github.com/hajimehoshi/ebiten/v2/ebitenutil"
+	"github.com/hajimehoshi/ebiten/v2/inpututil"
 )
 
 const (
@@ -26,7 +29,10 @@ const (
 	moveSpeed             = 2
 	stepDelay             = 60 / 4
 	defaultTPS            = 60.0
-	simStepsPerSecond     = defaultTPS * 6
+	defaultSimMultiplier  = 1
+	simMultiplierStep     = 1
+	minSimMultiplier      = 1
+	maxSimMultiplier      = 50
 	earOffsetCells        = 5
 	boundaryReflect       = 0.60
 	stepImpulseStrength   = 10
@@ -42,6 +48,8 @@ var showWallsFlag = flag.Bool("show-walls", false, "render wall geometry overlay
 var recordDefaultPGO = flag.Bool("record-default-pgo", false, "walk randomly for 15s while capturing default.pgo")
 var occludeLineOfSightFlag = flag.Bool("occlude-line-of-sight", true, "hide regions that are not in the listener's line of sight when rendering")
 var fovDegreesFlag = flag.Float64("fov-deg", 90.0, "field of view angle for LOS (degrees)")
+var threadCountFlag = flag.Int("threads", 0, "number of worker threads; 0 auto-detects")
+var debugFlag = flag.Bool("debug", false, "show FPS and simulation speed overlay")
 
 type intPoint struct {
 	x int
@@ -262,6 +270,8 @@ type Game struct {
 	ex, ey             float64
 	stepTimer          int
 	physicsAccumulator float64
+	lastSimDuration    time.Duration
+	simStepMultiplier  int
 	walls              []bool
 	levelRand          *rand.Rand
 	workerCount        int
@@ -287,23 +297,23 @@ type Game struct {
 	lastVisCY int
 }
 
-func newGame() *Game {
-	workerCount := runtime.NumCPU()
+func newGame(workerCount int) *Game {
 	if workerCount < 1 {
 		workerCount = 1
 	}
 	g := &Game{
-		field:            newWaveField(w, h),
-		ex:               float64(w / 2),
-		ey:               float64(h / 2),
-		levelRand:        rand.New(rand.NewSource(time.Now().UnixNano() + 1)),
-		walls:            make([]bool, w*h),
-		workerCount:      workerCount,
-		maskDirty:        true,
-		listenerForwardX: 0,
-		listenerForwardY: -1,
-		pixelBuf:         make([]byte, w*h*4),
-		autoWalkRand:     rand.New(rand.NewSource(time.Now().UnixNano() + 2)),
+		field:             newWaveField(w, h),
+		ex:                float64(w / 2),
+		ey:                float64(h / 2),
+		levelRand:         rand.New(rand.NewSource(time.Now().UnixNano() + 1)),
+		walls:             make([]bool, w*h),
+		workerCount:       workerCount,
+		maskDirty:         true,
+		listenerForwardX:  0,
+		listenerForwardY:  -1,
+		pixelBuf:          make([]byte, w*h*4),
+		autoWalkRand:      rand.New(rand.NewSource(time.Now().UnixNano() + 2)),
+		simStepMultiplier: defaultSimMultiplier,
 	}
 	g.workerCond = sync.NewCond(&g.workerMu)
 	for i := 0; i < workerCount; i++ {
@@ -429,6 +439,31 @@ func (g *Game) randomizeAutoWalkDirection() {
 	g.autoWalkFrameCount = 20 + g.autoWalkRand.Intn(50)
 }
 
+func (g *Game) handleDebugControls() {
+	if !*debugFlag {
+		return
+	}
+	if inpututil.IsKeyJustPressed(ebiten.KeyMinus) || inpututil.IsKeyJustPressed(ebiten.KeyKPSubtract) {
+		g.adjustSimMultiplier(-simMultiplierStep)
+	}
+	if inpututil.IsKeyJustPressed(ebiten.KeyEqual) || inpututil.IsKeyJustPressed(ebiten.KeyKPAdd) {
+		g.adjustSimMultiplier(simMultiplierStep)
+	}
+}
+
+func (g *Game) adjustSimMultiplier(delta int) {
+	g.simStepMultiplier += delta
+	if g.simStepMultiplier < minSimMultiplier {
+		g.simStepMultiplier = minSimMultiplier
+	} else if g.simStepMultiplier > maxSimMultiplier {
+		g.simStepMultiplier = maxSimMultiplier
+	}
+}
+
+func (g *Game) simStepsPerSecond() float64 {
+	return defaultTPS * float64(g.simStepMultiplier)
+}
+
 func (g *Game) Update() error {
 	dx, dy := g.movementVector()
 	oldX, oldY := g.ex, g.ey
@@ -437,6 +472,8 @@ func (g *Game) Update() error {
 	if g.isWall(int(g.ex), int(g.ey)) {
 		g.ex, g.ey = oldX, oldY
 	}
+
+	g.handleDebugControls()
 
 	moving := dx != 0 || dy != 0
 	if moving {
@@ -472,14 +509,16 @@ func (g *Game) Update() error {
 	if actualTPS < 1 {
 		actualTPS = defaultTPS
 	}
-	g.physicsAccumulator += simStepsPerSecond / actualTPS
+	g.physicsAccumulator += g.simStepsPerSecond() / actualTPS
 	steps := int(g.physicsAccumulator)
 	if steps < 1 {
 		steps = 1
 	}
+	simStart := time.Now()
 	for i := 0; i < steps; i++ {
 		g.stepWave()
 	}
+	g.lastSimDuration = time.Since(simStart)
 	g.physicsAccumulator -= float64(steps)
 
 	// Keep LOS visibility mask updated here to avoid work in Draw.
@@ -871,6 +910,22 @@ func (g *Game) Draw(screen *ebiten.Image) {
 		}
 	}
 	g.drawEarIndicators(screen, int(g.ex), int(g.ey))
+
+	if *debugFlag {
+		fps := ebiten.ActualFPS()
+		tps := ebiten.ActualTPS()
+		if tps < 0 {
+			tps = 0
+		}
+		simMultiplier := 0.0
+		if defaultTPS > 0 {
+			simMultiplier = tps / defaultTPS
+		}
+		simMS := g.lastSimDuration.Seconds() * 1000
+		simSteps := g.simStepsPerSecond()
+		debugMsg := fmt.Sprintf("FPS: %.1f\nSim speed: %.2fx (%.1f TPS)\nSim steps: %.1f/s (mult %dx, +/-)\nSim: %.2f ms", fps, simMultiplier, tps, simSteps, g.simStepMultiplier, simMS)
+		ebitenutil.DebugPrint(screen, debugMsg)
+	}
 }
 
 func (g *Game) Layout(_, _ int) (int, int) { return w, h }
@@ -943,7 +998,14 @@ func startDefaultPGORecording(path string) (func(), error) {
 
 func main() {
 	flag.Parse()
-	runtime.GOMAXPROCS(runtime.NumCPU())
+	workerCount := *threadCountFlag
+	if workerCount <= 0 {
+		workerCount = runtime.NumCPU()
+	}
+	if workerCount < 1 {
+		workerCount = 1
+	}
+	runtime.GOMAXPROCS(workerCount)
 
 	var stopProfile func()
 	if *recordDefaultPGO {
@@ -955,7 +1017,7 @@ func main() {
 		defer stopProfile()
 	}
 
-	g := newGame()
+	g := newGame(workerCount)
 	if *recordDefaultPGO {
 		g.enableAutoWalk(pgoRecordDuration)
 		go func(stop func()) {
