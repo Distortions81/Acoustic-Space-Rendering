@@ -3,7 +3,6 @@ package main
 // stepWaveCPU executes one CPU simulation tick, synchronizing worker goroutines
 // and applying boundary conditions.
 func (g *Game) stepWaveCPU() {
-	g.ensureInteriorMask()
 	g.workerMu.Lock()
 	g.workerPending = g.workerCount
 	g.workerStep++

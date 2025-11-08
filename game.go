@@ -31,7 +31,6 @@ type Game struct {
 
 	workerCount   int
 	workerMasks   []workerMask
-	maskDirty     bool
 	workerMu      sync.Mutex
 	workerCond    *sync.Cond
 	workerStep    int
@@ -83,7 +82,6 @@ func newGame(workerCount int, enableOpenCL bool) *Game {
 		levelRand:           rand.New(rand.NewSource(time.Now().UnixNano() + 1)),
 		walls:               make([]bool, w*h),
 		workerCount:         workerCount,
-		maskDirty:           true,
 		listenerForwardX:    0,
 		listenerForwardY:    -1,
 		pixelBuf:            make([]byte, w*h*4),
@@ -182,8 +180,7 @@ func (g *Game) Update() error {
 	simStart := time.Now()
 	var producedSamples []int16
 	if g.gpuSolver != nil {
-		wallsDirty := g.maskDirty
-		samples, err := g.gpuSolver.Step(g.field, g.walls, steps, wallsDirty)
+		samples, err := g.gpuSolver.Step(g.field, g.walls, steps, false)
 		if err != nil {
 			log.Printf("OpenCL solver error: %v; falling back to CPU", err)
 			g.gpuSolver.Close()
@@ -191,9 +188,6 @@ func (g *Game) Update() error {
 			g.startWorkers()
 			g.stepWaveCPUBatch(steps)
 		} else {
-			if wallsDirty {
-				g.rebuildInteriorMask()
-			}
 			g.setPressureSamples(samples)
 		}
 	} else {
