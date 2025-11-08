@@ -60,6 +60,7 @@ var debugFlag = flag.Bool("debug", false, "show FPS and simulation speed overlay
 var useOpenCLFlag = flag.Bool("use-opencl", true, "attempt to run the wave simulation via OpenCL (build with -tags opencl)")
 var adaptiveStepScalingFlag = flag.Bool("scale-steps-with-tps", false, "scale the per-frame physics work based on ActualTPS instead of using a fixed batch size")
 var maxStepBurstFlag = flag.Int("max-step-burst", 4, "maximum multiple of the base physics step count to execute when recovering from lag while step scaling is enabled (0 disables the clamp)")
+var disableAudioFlag = flag.Bool("disable-audio", false, "skip audio initialization and waveform streaming")
 
 type intPoint struct {
 	x int
@@ -348,6 +349,7 @@ type Game struct {
 	audioElapsed   float64
 	audioNextTime  float64
 	audioSampleDur float64
+	audioDisabled  bool
 }
 
 func newGame(workerCount int, enableOpenCL bool) *Game {
@@ -371,9 +373,12 @@ func newGame(workerCount int, enableOpenCL bool) *Game {
 		adaptiveStepScaling: *adaptiveStepScalingFlag,
 		maxStepBurst:        *maxStepBurstFlag,
 		pressureSampleIndex: sampleIndex,
+		audioDisabled:       *disableAudioFlag,
 	}
 	g.workerCond = sync.NewCond(&g.workerMu)
-	g.initAudio()
+	if !g.audioDisabled {
+		g.initAudio()
+	}
 	if enableOpenCL {
 		if solver, err := newOpenCLWaveSolver(w, h, sampleIndex); err != nil {
 			log.Printf("OpenCL initialization failed: %v", err)
@@ -392,6 +397,9 @@ func newGame(workerCount int, enableOpenCL bool) *Game {
 }
 
 func (g *Game) ensurePressureSampleCapacity(n int) {
+	if g.audioDisabled {
+		return
+	}
 	if n <= 0 {
 		if g.latestPressureSamples != nil {
 			g.latestPressureSamples = g.latestPressureSamples[:0]
@@ -406,11 +414,17 @@ func (g *Game) ensurePressureSampleCapacity(n int) {
 }
 
 func (g *Game) setPressureSamples(samples []int16) {
+	if g.audioDisabled {
+		return
+	}
 	g.ensurePressureSampleCapacity(len(samples))
 	copy(g.latestPressureSamples, samples)
 }
 
 func (g *Game) initAudio() {
+	if g.audioDisabled {
+		return
+	}
 	g.audioSampleDur = 1.0 / float64(audioSampleRate)
 	ctx := audio.CurrentContext()
 	if ctx == nil {
@@ -438,6 +452,10 @@ func (g *Game) initAudio() {
 }
 
 func (g *Game) flushAudioBuffer() {
+	if g.audioDisabled {
+		g.audioPCM = g.audioPCM[:0]
+		return
+	}
 	if len(g.audioPCM) == 0 {
 		return
 	}
@@ -464,6 +482,9 @@ func (g *Game) flushAudioBuffer() {
 }
 
 func (g *Game) streamAudioSamples(samples []int16, sourceRate float64) {
+	if g.audioDisabled {
+		return
+	}
 	if sourceRate <= 0 {
 		sourceRate = float64(audioSampleRate)
 	}
@@ -773,10 +794,12 @@ func (g *Game) Update() error {
 	} else {
 		g.stepWaveCPUBatch(steps)
 	}
-	producedSamples = g.latestPressureSamples
+	if !g.audioDisabled {
+		producedSamples = g.latestPressureSamples
+	}
 	g.lastSimDuration = time.Since(simStart)
 
-	if producedSamples != nil {
+	if !g.audioDisabled && producedSamples != nil {
 		sourceRate := g.simStepsPerSecond()
 		if g.adaptiveStepScaling {
 			sourceRate = float64(steps) * actualTPS
@@ -1130,7 +1153,15 @@ func (g *Game) stepWaveCPU() {
 
 func (g *Game) stepWaveCPUBatch(steps int) {
 	if steps <= 0 {
-		g.ensurePressureSampleCapacity(0)
+		if !g.audioDisabled {
+			g.ensurePressureSampleCapacity(0)
+		}
+		return
+	}
+	if g.audioDisabled {
+		for i := 0; i < steps; i++ {
+			g.stepWaveCPU()
+		}
 		return
 	}
 	g.ensurePressureSampleCapacity(steps)
