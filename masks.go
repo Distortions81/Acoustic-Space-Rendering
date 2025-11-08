@@ -34,12 +34,4 @@ func (g *Game) rebuildInteriorMask() {
 		rows = append(rows, rowMask{y: y, spans: spans})
 	}
 	g.workerMasks = assignRowMasks(g.workerCount, rows)
-	g.maskDirty = false
-}
-
-// ensureInteriorMask rebuilds the mask if worker counts change or walls moved.
-func (g *Game) ensureInteriorMask() {
-	if g.maskDirty || len(g.workerMasks) != g.workerCount {
-		g.rebuildInteriorMask()
-	}
 }
