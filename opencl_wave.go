@@ -110,11 +110,13 @@ func newOpenCLWaveSolver(width, height int) (*openCLWaveSolver, error) {
 		return nil, fmt.Errorf("creating OpenCL program: %w", err)
 	}
 	if err := program.BuildProgram([]*cl.Device{device}, ""); err != nil {
-		buildLog, _ := program.GetProgramBuildLog(device)
 		program.Release()
 		queue.Release()
 		context.Release()
-		return nil, fmt.Errorf("building OpenCL program: %w\n%s", err, buildLog)
+		if buildErr, ok := err.(cl.BuildError); ok {
+			return nil, fmt.Errorf("building OpenCL program: %s", string(buildErr))
+		}
+		return nil, fmt.Errorf("building OpenCL program: %w", err)
 	}
 	kernel, err := program.CreateKernel("wave_step")
 	if err != nil {
