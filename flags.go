@@ -7,7 +7,7 @@ import "flag"
 // the monolithic main.go file.
 var (
 	// showWallsFlag toggles rendering of wall geometry overlays.
-	showWallsFlag = flag.Bool("show-walls", false, "render wall geometry overlays")
+	showWallsFlag = flag.Bool("show-walls", true, "render wall geometry overlays")
 
 	// recordDefaultPGO triggers a scripted walk to produce default.pgo.
 	recordDefaultPGO = flag.Bool("record-default-pgo", false, "walk randomly for 15s while capturing default.pgo")
