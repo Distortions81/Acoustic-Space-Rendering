@@ -2,7 +2,10 @@ module ASR
 
 go 1.24.9
 
-require github.com/hajimehoshi/ebiten/v2 v2.9.4
+require (
+        github.com/hajimehoshi/ebiten/v2 v2.9.4
+        github.com/jgillich/go-opencl v0.0.0-20180608191952-a0efba3e5257
+)
 
 require (
 	github.com/ebitengine/gomobile v0.0.0-20250923094054-ea854a63cce1 // indirect
