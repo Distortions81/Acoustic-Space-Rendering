@@ -1,9 +1,11 @@
 package main
 
 import (
+	"encoding/binary"
 	"flag"
 	"fmt"
 	"image/color"
+	"io"
 	"log"
 	"math"
 	"math/rand"
@@ -14,6 +16,7 @@ import (
 	"time"
 
 	"github.com/hajimehoshi/ebiten/v2"
+	"github.com/hajimehoshi/ebiten/v2/audio"
 	"github.com/hajimehoshi/ebiten/v2/ebitenutil"
 	"github.com/hajimehoshi/ebiten/v2/inpututil"
 )
@@ -42,6 +45,10 @@ const (
 	wallExclusionRadius   = 1
 	wallThicknessVariance = 2
 	pgoRecordDuration     = 15 * time.Second
+	audioSampleRate       = 48000
+	audioBufferDuration   = 80 * time.Millisecond
+	pcm16MaxValue         = 32767
+	pcm16MinValue         = -32768
 )
 
 var showWallsFlag = flag.Bool("show-walls", false, "render wall geometry overlays")
@@ -89,7 +96,7 @@ func floatToPCM16(v float32) int16 {
 	} else if v < -1 {
 		v = -1
 	}
-	return int16(math.Round(float64(v) * 32767))
+	return int16(math.Round(float64(v) * float64(pcm16MaxValue)))
 }
 
 func newWaveField(width, height int) *waveField {
@@ -329,6 +336,14 @@ type Game struct {
 	lastVisCY      int
 	gpuSolver      *openCLWaveSolver
 	workersStarted bool
+	audioCtx       *audio.Context
+	audioPlayer    *audio.Player
+	audioPipe      *io.PipeWriter
+	audioPCM       []int16
+	audioWriteBuf  []byte
+	audioElapsed   float64
+	audioNextTime  float64
+	audioSampleDur float64
 }
 
 func newGame(workerCount int, enableOpenCL bool) *Game {
@@ -352,6 +367,7 @@ func newGame(workerCount int, enableOpenCL bool) *Game {
 		pressureSampleIndex: sampleIndex,
 	}
 	g.workerCond = sync.NewCond(&g.workerMu)
+	g.initAudio()
 	if enableOpenCL {
 		if solver, err := newOpenCLWaveSolver(w, h, sampleIndex); err != nil {
 			log.Printf("OpenCL initialization failed: %v", err)
@@ -386,6 +402,119 @@ func (g *Game) ensurePressureSampleCapacity(n int) {
 func (g *Game) setPressureSamples(samples []int16) {
 	g.ensurePressureSampleCapacity(len(samples))
 	copy(g.latestPressureSamples, samples)
+}
+
+func (g *Game) initAudio() {
+	g.audioSampleDur = 1.0 / float64(audioSampleRate)
+	ctx := audio.CurrentContext()
+	if ctx == nil {
+		ctx = audio.NewContext(audioSampleRate)
+	} else if ctx.SampleRate() != audioSampleRate {
+		log.Printf("audio context sample rate %d does not match expected %d; disabling audio", ctx.SampleRate(), audioSampleRate)
+		return
+	}
+	pr, pw := io.Pipe()
+	player, err := ctx.NewPlayer(pr)
+	if err != nil {
+		log.Printf("creating audio player failed: %v", err)
+		_ = pr.Close()
+		_ = pw.Close()
+		return
+	}
+	player.SetBufferSize(audioBufferDuration)
+	g.audioCtx = ctx
+	g.audioPlayer = player
+	g.audioPipe = pw
+	g.audioElapsed = 0
+	g.audioNextTime = 0
+	g.audioPCM = g.audioPCM[:0]
+	player.Play()
+}
+
+func (g *Game) flushAudioBuffer() {
+	if len(g.audioPCM) == 0 {
+		return
+	}
+	if g.audioPipe == nil {
+		g.audioPCM = g.audioPCM[:0]
+		return
+	}
+	byteLen := len(g.audioPCM) * 2
+	if cap(g.audioWriteBuf) < byteLen {
+		g.audioWriteBuf = make([]byte, byteLen)
+	}
+	buf := g.audioWriteBuf[:byteLen]
+	for i, sample := range g.audioPCM {
+		binary.LittleEndian.PutUint16(buf[i*2:], uint16(sample))
+	}
+	if _, err := g.audioPipe.Write(buf); err != nil {
+		log.Printf("audio stream write failed: %v", err)
+		_ = g.audioPipe.Close()
+		g.audioPipe = nil
+	} else if g.audioPlayer != nil && !g.audioPlayer.IsPlaying() {
+		g.audioPlayer.Play()
+	}
+	g.audioPCM = g.audioPCM[:0]
+}
+
+func (g *Game) streamAudioSamples(samples []int16, sourceRate float64) {
+	if sourceRate <= 0 {
+		sourceRate = float64(audioSampleRate)
+	}
+	chunkDuration := 0.0
+	if len(samples) > 0 {
+		chunkDuration = float64(len(samples)) / sourceRate
+	}
+	chunkStart := g.audioElapsed
+	chunkEnd := chunkStart + chunkDuration
+	if len(samples) == 0 {
+		g.audioElapsed = chunkEnd
+		if g.audioNextTime < g.audioElapsed {
+			g.audioNextTime = g.audioElapsed
+		}
+		return
+	}
+	if g.audioNextTime < chunkStart {
+		g.audioNextTime = chunkStart
+	}
+	g.audioPCM = g.audioPCM[:0]
+	for g.audioNextTime < chunkEnd {
+		relTime := g.audioNextTime - chunkStart
+		srcPos := relTime * sourceRate
+		idx := int(srcPos)
+		if idx < 0 {
+			idx = 0
+		}
+		if idx >= len(samples) {
+			idx = len(samples) - 1
+		}
+		sample := float64(samples[idx])
+		if idx+1 < len(samples) {
+			frac := srcPos - float64(idx)
+			nextSample := float64(samples[idx+1])
+			sample += (nextSample - sample) * frac
+		}
+		if sample > pcm16MaxValue {
+			sample = pcm16MaxValue
+		} else if sample < pcm16MinValue {
+			sample = pcm16MinValue
+		}
+		v := int16(math.Round(sample))
+		g.audioPCM = append(g.audioPCM, v, v)
+		g.audioNextTime += g.audioSampleDur
+	}
+	g.audioElapsed = chunkEnd
+	if g.audioPipe == nil {
+		g.audioPCM = g.audioPCM[:0]
+		if g.audioNextTime < g.audioElapsed {
+			g.audioNextTime = g.audioElapsed
+		}
+		return
+	}
+	g.flushAudioBuffer()
+	if g.audioNextTime < g.audioElapsed {
+		g.audioNextTime = g.audioElapsed
+	}
 }
 
 func (g *Game) samplePressureAtIndex() int16 {
@@ -585,6 +714,7 @@ func (g *Game) Update() error {
 		steps = 1
 	}
 	simStart := time.Now()
+	var producedSamples []int16
 	if g.gpuSolver != nil {
 		wallsDirty := g.maskDirty
 		samples, err := g.gpuSolver.Step(g.field, g.walls, steps, wallsDirty)
@@ -603,8 +733,14 @@ func (g *Game) Update() error {
 	} else {
 		g.stepWaveCPUBatch(steps)
 	}
+	producedSamples = g.latestPressureSamples
 	g.lastSimDuration = time.Since(simStart)
 	g.physicsAccumulator -= float64(steps)
+
+	if producedSamples != nil {
+		sourceRate := float64(steps) * actualTPS
+		g.streamAudioSamples(producedSamples, sourceRate)
+	}
 
 	// Keep LOS visibility mask updated here to avoid work in Draw.
 	if *occludeLineOfSightFlag {
