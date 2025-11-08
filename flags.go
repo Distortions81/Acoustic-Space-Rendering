@@ -9,6 +9,9 @@ var (
 	// showWallsFlag toggles rendering of wall geometry overlays.
 	showWallsFlag = flag.Bool("show-walls", true, "render wall geometry overlays")
 
+	// wallReflectFlag adjusts how strongly the simulation boundaries reflect waves.
+	wallReflectFlag = flag.Float64("wall-reflect", defaultBoundaryReflect, "reflection coefficient for map boundaries (0-1)")
+
 	// recordDefaultPGO triggers a scripted walk to produce default.pgo.
 	recordDefaultPGO = flag.Bool("record-default-pgo", false, "walk randomly for 15s while capturing default.pgo")
 

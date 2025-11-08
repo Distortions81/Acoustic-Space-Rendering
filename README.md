@@ -76,3 +76,9 @@ go run -tags opencl .
 ```
 
 Use the `-use-opencl` runtime flag to toggle the solver on or off after compiling with the tag.
+
+### Runtime options
+
+Customize simulation behavior with additional flags:
+
+- `-wall-reflect=<value>` — sets how strongly the outer walls reflect waves. Use a value between 0 (fully absorbing) and 1 (perfect reflection); the default is `0.4`.

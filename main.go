@@ -13,6 +13,12 @@ import (
 // main configures the runtime, optionally records a profile, and launches Ebiten.
 func main() {
 	flag.Parse()
+	boundaryReflect = *wallReflectFlag
+	if boundaryReflect < 0 {
+		boundaryReflect = 0
+	} else if boundaryReflect > 1 {
+		boundaryReflect = 1
+	}
 	workerCount := *threadCountFlag
 	if workerCount <= 0 {
 		workerCount = runtime.NumCPU()
