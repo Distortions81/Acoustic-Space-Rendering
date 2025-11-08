@@ -50,6 +50,7 @@ var occludeLineOfSightFlag = flag.Bool("occlude-line-of-sight", true, "hide regi
 var fovDegreesFlag = flag.Float64("fov-deg", 90.0, "field of view angle for LOS (degrees)")
 var threadCountFlag = flag.Int("threads", 0, "number of worker threads; 0 auto-detects")
 var debugFlag = flag.Bool("debug", false, "show FPS and simulation speed overlay")
+var useOpenCLFlag = flag.Bool("use-opencl", false, "attempt to run the wave simulation via OpenCL (build with -tags opencl)")
 
 type intPoint struct {
 	x int
@@ -265,6 +266,22 @@ func assignRowMasks(workerCount int, rows []rowMask) []workerMask {
 	return masks
 }
 
+func (g *Game) startWorkers() {
+	if g.workersStarted {
+		return
+	}
+	if g.workerCount < 1 {
+		g.workerCount = 1
+	}
+	if g.workerCond == nil {
+		g.workerCond = sync.NewCond(&g.workerMu)
+	}
+	g.workersStarted = true
+	for i := 0; i < g.workerCount; i++ {
+		go g.waveWorkerLoop(i)
+	}
+}
+
 type Game struct {
 	field              *waveField
 	ex, ey             float64
@@ -293,11 +310,13 @@ type Game struct {
 	visibleStamp       []uint32
 	visibleGen         uint32
 	// cache the last integer listener position used for LOS to avoid recomputing
-	lastVisCX int
-	lastVisCY int
+	lastVisCX      int
+	lastVisCY      int
+	gpuSolver      *openCLWaveSolver
+	workersStarted bool
 }
 
-func newGame(workerCount int) *Game {
+func newGame(workerCount int, enableOpenCL bool) *Game {
 	if workerCount < 1 {
 		workerCount = 1
 	}
@@ -316,8 +335,16 @@ func newGame(workerCount int) *Game {
 		simStepMultiplier: defaultSimMultiplier,
 	}
 	g.workerCond = sync.NewCond(&g.workerMu)
-	for i := 0; i < workerCount; i++ {
-		go g.waveWorkerLoop(i)
+	if enableOpenCL {
+		if solver, err := newOpenCLWaveSolver(w, h); err != nil {
+			log.Printf("OpenCL initialization failed: %v", err)
+		} else {
+			log.Printf("OpenCL solver enabled (device: %s)", solver.DeviceName())
+			g.gpuSolver = solver
+		}
+	}
+	if g.gpuSolver == nil {
+		g.startWorkers()
 	}
 	g.generateWalls()
 	g.rebuildInteriorMask()
@@ -852,6 +879,23 @@ func (g *Game) castVisibilityRay(x0, y0, x1, y1 int) {
 }
 
 func (g *Game) stepWave() {
+	if g.gpuSolver != nil {
+		if err := g.gpuSolver.Step(g.field, g.walls); err != nil {
+			log.Printf("OpenCL solver error: %v; falling back to CPU", err)
+			g.gpuSolver.Close()
+			g.gpuSolver = nil
+			g.startWorkers()
+			g.stepWaveCPU()
+		} else {
+			g.field.zeroBoundaries()
+			g.field.swap()
+		}
+		return
+	}
+	g.stepWaveCPU()
+}
+
+func (g *Game) stepWaveCPU() {
 	g.ensureInteriorMask()
 	g.workerMu.Lock()
 	g.workerPending = g.workerCount
@@ -1017,7 +1061,7 @@ func main() {
 		defer stopProfile()
 	}
 
-	g := newGame(workerCount)
+	g := newGame(workerCount, *useOpenCLFlag)
 	if *recordDefaultPGO {
 		g.enableAutoWalk(pgoRecordDuration)
 		go func(stop func()) {
