@@ -14,7 +14,7 @@ var (
 
 	// occludeLineOfSightFlag hides regions outside of the listener's line of
 	// sight while rendering.
-	occludeLineOfSightFlag = flag.Bool("occlude-line-of-sight", true, "hide regions that are not in the listener's line of sight when rendering")
+	occludeLineOfSightFlag = flag.Bool("occlude-line-of-sight", false, "hide regions that are not in the listener's line of sight when rendering")
 
 	// fovDegreesFlag adjusts the field of view for visibility calculations.
 	fovDegreesFlag = flag.Float64("fov-deg", 90.0, "field of view angle for LOS (degrees)")
