@@ -56,16 +56,6 @@ func (f *waveField) zeroCell(x, y int) {
 	f.next[idx] = 0
 }
 
-// readCurr returns the value in the current buffer at the given coordinates.
-func (f *waveField) readCurr(x, y int) float32 {
-	return f.curr[y*f.width+x]
-}
-
-// swap rotates the triple buffers so that next becomes current and current becomes previous.
-func (f *waveField) swap() {
-	f.prev, f.curr, f.next = f.curr, f.next, f.prev
-}
-
 func (f *waveField) takeImpulses() []waveImpulse {
 	if len(f.impulses) == 0 {
 		return nil
@@ -73,24 +63,4 @@ func (f *waveField) takeImpulses() []waveImpulse {
 	batch := f.impulses
 	f.impulses = f.impulses[:0]
 	return batch
-}
-
-// zeroBoundaries applies absorbing boundary conditions on the edges of the grid
-// to prevent reflections back into the simulation domain.
-func (f *waveField) zeroBoundaries() {
-	lastRow := f.height - 1
-	lastCol := f.width - 1
-	reflect := float32(boundaryReflect)
-	for x := 0; x < f.width; x++ {
-		top := f.next[1*f.width+x]
-		bottom := f.next[(lastRow-1)*f.width+x]
-		f.next[0*f.width+x] = -top * reflect
-		f.next[lastRow*f.width+x] = -bottom * reflect
-	}
-	for y := 1; y < lastRow; y++ {
-		left := f.next[y*f.width+1]
-		right := f.next[y*f.width+lastCol-1]
-		f.next[y*f.width+0] = -left * reflect
-		f.next[y*f.width+lastCol] = -right * reflect
-	}
 }
