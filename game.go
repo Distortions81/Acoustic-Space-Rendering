@@ -38,6 +38,7 @@ type Game struct {
 
 	gpuSolver      *openCLWaveSolver
 	impulsesActive bool
+	wallsDirty     bool
 }
 
 // newGame constructs a fully initialized Game instance.
@@ -112,16 +113,23 @@ func (g *Game) Update() error {
 
 	g.impulsesActive = impulsesFired
 
-	steps := g.simStepMultiplier
-	simStart := time.Now()
-	if err := g.gpuSolver.Step(g.field, g.walls, steps, false); err != nil {
-		return err
-	}
-	g.lastSimDuration = time.Since(simStart)
-
 	if *occludeLineOfSightFlag {
 		g.refreshVisibleMask()
 	}
+
+	steps := g.simStepMultiplier
+	simStart := time.Now()
+	var visibleStamp []uint32
+	var visibleGen uint32
+	if *occludeLineOfSightFlag {
+		visibleStamp = g.visibleStamp
+		visibleGen = g.visibleGen
+	}
+	if err := g.gpuSolver.Step(g.field, g.walls, steps, g.wallsDirty, *showWallsFlag, *occludeLineOfSightFlag, visibleStamp, visibleGen); err != nil {
+		return err
+	}
+	g.wallsDirty = false
+	g.lastSimDuration = time.Since(simStart)
 
 	return nil
 }
