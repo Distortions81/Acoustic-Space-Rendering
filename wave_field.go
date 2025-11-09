@@ -1,7 +1,5 @@
 package main
 
-import "math"
-
 // waveField stores the three wave simulation buffers required by the finite
 // difference solver.
 type waveField struct {
@@ -11,20 +9,7 @@ type waveField struct {
 	next          []float32
 }
 
-// defaultPressureSampleIndex selects the central cell used when exporting audio.
-func defaultPressureSampleIndex(width, height int) int {
-	return (height/2)*width + (width / 2)
-}
-
-// floatToPCM16 converts a normalized float sample into signed 16-bit PCM.
-func floatToPCM16(v float32) int16 {
-	if v > 1 {
-		v = 1
-	} else if v < -1 {
-		v = -1
-	}
-	return int16(math.Round(float64(v) * float64(pcm16MaxValue)))
-}
+// audio removal: sample index and PCM helpers removed
 
 // newWaveField allocates a waveField with properly sized buffers.
 func newWaveField(width, height int) *waveField {

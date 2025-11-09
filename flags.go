@@ -37,6 +37,4 @@ var (
 	// maxStepBurstFlag limits how aggressively the simulation catches up.
 	maxStepBurstFlag = flag.Int("max-step-burst", 4, "maximum multiple of the base physics step count to execute when recovering from lag while step scaling is enabled (0 disables the clamp)")
 
-	// disableAudioFlag skips all audio initialization and playback.
-	disableAudioFlag = flag.Bool("disable-audio", true, "skip audio initialization and waveform streaming")
 )

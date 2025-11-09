@@ -15,23 +15,12 @@ func (g *Game) stepWaveCPU() {
 	g.field.swap()
 }
 
-// stepWaveCPUBatch runs multiple simulation ticks and records audio samples when enabled.
+// stepWaveCPUBatch runs multiple simulation ticks.
 func (g *Game) stepWaveCPUBatch(steps int) {
-	if steps <= 0 {
-		if !g.audioDisabled {
-			g.ensurePressureSampleCapacity(0)
-		}
-		return
-	}
-	if g.audioDisabled {
-		for i := 0; i < steps; i++ {
-			g.stepWaveCPU()
-		}
-		return
-	}
-	g.ensurePressureSampleCapacity(steps)
-	for i := 0; i < steps; i++ {
-		g.stepWaveCPU()
-		g.latestPressureSamples[i] = g.samplePressureAtIndex()
-	}
+    if steps <= 0 {
+        return
+    }
+    for i := 0; i < steps; i++ {
+        g.stepWaveCPU()
+    }
 }

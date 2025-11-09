@@ -25,16 +25,10 @@ type openCLWaveSolver struct {
 	wallIndexBuf      *cl.MemObject
 	width             int
 	height            int
-	wallIndices       []int32
+    wallIndices       []int32
 	wallCount         int
 	wallsSynced       bool
-	deviceName        string
-	sampleIndex       int
-	sampleOffset      int
-	sampleBuffer      []int16
-	sampleScratch     []float32
-    sampleDeviceBuf   *cl.MemObject
-    sampleDeviceCap   int
+    deviceName        string
     coldStart         bool
 }
 
@@ -116,7 +110,7 @@ __kernel void apply_boundary_cols(
     buffer[right_idx] = -buffer[right_idx - 1] * reflect;
 }`
 
-func newOpenCLWaveSolver(width, height int, sampleIndex int) (*openCLWaveSolver, error) {
+func newOpenCLWaveSolver(width, height int) (*openCLWaveSolver, error) {
 	platforms, err := cl.GetPlatforms()
 	if err != nil {
 		msg := "querying OpenCL platforms"
@@ -213,11 +207,7 @@ func newOpenCLWaveSolver(width, height int, sampleIndex int) (*openCLWaveSolver,
 		context.Release()
 		return nil, fmt.Errorf("creating boundary column kernel: %w", err)
 	}
-	size := width * height
-	if sampleIndex < 0 || sampleIndex >= size {
-		sampleIndex = defaultPressureSampleIndex(width, height)
-	}
-	sampleOffset := sampleIndex * int(unsafe.Sizeof(float32(0)))
+    size := width * height
 	byteSize := size * int(unsafe.Sizeof(float32(0)))
 	currBuf, err := context.CreateEmptyBuffer(cl.MemReadOnly, byteSize)
 	if err != nil {
@@ -284,9 +274,7 @@ func newOpenCLWaveSolver(width, height int, sampleIndex int) (*openCLWaveSolver,
 		wallIndexBuf:      wallIndexBuf,
 		width:             width,
 		height:            height,
-		deviceName:        device.Name(),
-        sampleIndex:       sampleIndex,
-        sampleOffset:      sampleOffset,
+        deviceName:        device.Name(),
         coldStart:         true,
     }
 
@@ -352,59 +340,7 @@ func (s *openCLWaveSolver) ensureWallIndices(walls []bool) []int32 {
 	return s.wallIndices
 }
 
-func (s *openCLWaveSolver) ensureSampleBuffer(steps int) []int16 {
-	if steps <= 0 {
-		if s.sampleBuffer != nil {
-			s.sampleBuffer = s.sampleBuffer[:0]
-			return s.sampleBuffer
-		}
-		return nil
-	}
-	if cap(s.sampleBuffer) < steps {
-		s.sampleBuffer = make([]int16, steps)
-	} else {
-		s.sampleBuffer = s.sampleBuffer[:steps]
-	}
-	return s.sampleBuffer
-}
-
-func (s *openCLWaveSolver) ensureSampleScratch(steps int) []float32 {
-	if steps <= 0 {
-		if s.sampleScratch != nil {
-			s.sampleScratch = s.sampleScratch[:0]
-			return s.sampleScratch
-		}
-		return nil
-	}
-	if cap(s.sampleScratch) < steps {
-		s.sampleScratch = make([]float32, steps)
-	} else {
-		s.sampleScratch = s.sampleScratch[:steps]
-	}
-	return s.sampleScratch
-}
-
-func (s *openCLWaveSolver) ensureSampleDeviceBuffer(steps int) error {
-	if steps <= 0 {
-		return nil
-	}
-	if steps <= s.sampleDeviceCap {
-		return nil
-	}
-	if s.sampleDeviceBuf != nil {
-		s.sampleDeviceBuf.Release()
-		s.sampleDeviceBuf = nil
-		s.sampleDeviceCap = 0
-	}
-	byteSize := steps * int(unsafe.Sizeof(float32(0)))
-	buf, err := s.context.CreateEmptyBuffer(cl.MemReadWrite, byteSize)
-	if err != nil {
-		return fmt.Errorf("allocating sample buffer: %w", err)
-	}
-	s.sampleDeviceBuf = buf
-	s.sampleDeviceCap = steps
-	return nil
-}
+// audio sampling helpers removed
 
 func (s *openCLWaveSolver) bindDynamicBuffers() error {
 	if err := s.kernel.SetArgBuffer(4, s.currBuf); err != nil {
@@ -428,22 +364,22 @@ func (s *openCLWaveSolver) bindDynamicBuffers() error {
 	return nil
 }
 
-func (s *openCLWaveSolver) Step(field *waveField, walls []bool, steps int, wallsDirty bool) ([]int16, error) {
-	if steps <= 0 {
-		return s.ensureSampleBuffer(0), nil
-	}
+func (s *openCLWaveSolver) Step(field *waveField, walls []bool, steps int, wallsDirty bool) error {
+    if steps <= 0 {
+        return nil
+    }
 	size := s.width * s.height
-	if len(field.curr) != size || len(field.prev) != size || len(field.next) != size {
-		return nil, fmt.Errorf("unexpected field buffer size")
-	}
+    if len(field.curr) != size || len(field.prev) != size || len(field.next) != size {
+        return fmt.Errorf("unexpected field buffer size")
+    }
     // Upload current buffer each step to reflect any host-side impulses.
     if _, err := s.queue.EnqueueWriteBufferFloat32(s.currBuf, false, 0, field.curr, nil); err != nil {
-        return nil, fmt.Errorf("writing current buffer: %w", err)
+        return fmt.Errorf("writing current buffer: %w", err)
     }
     // Avoid re-uploading previous buffer after the initial frame; device keeps it updated.
     if s.coldStart {
         if _, err := s.queue.EnqueueWriteBufferFloat32(s.prevBuf, false, 0, field.prev, nil); err != nil {
-            return nil, fmt.Errorf("writing previous buffer: %w", err)
+            return fmt.Errorf("writing previous buffer: %w", err)
         }
     }
 	if !s.wallsSynced || wallsDirty {
@@ -452,74 +388,59 @@ func (s *openCLWaveSolver) Step(field *waveField, walls []bool, steps int, walls
 		if s.wallCount > 0 {
 			ptr := unsafe.Pointer(&indices[0])
 			byteLen := len(indices) * int(unsafe.Sizeof(int32(0)))
-			if _, err := s.queue.EnqueueWriteBuffer(s.wallIndexBuf, false, 0, byteLen, ptr, nil); err != nil {
-				return nil, fmt.Errorf("writing wall index buffer: %w", err)
-			}
-		} else {
-			s.wallCount = 0
-		}
-		if err := s.zeroWallsKernel.SetArgInt32(2, int32(s.wallCount)); err != nil {
-			return nil, fmt.Errorf("setting wall count: %w", err)
-		}
-		s.wallsSynced = true
-	} else {
-		if err := s.zeroWallsKernel.SetArgInt32(2, int32(s.wallCount)); err != nil {
-			return nil, fmt.Errorf("refreshing wall count: %w", err)
-		}
-	}
-	if err := s.bindDynamicBuffers(); err != nil {
-		return nil, fmt.Errorf("binding buffers: %w", err)
-	}
-	global := []int{size}
-	samples := s.ensureSampleBuffer(steps)
-	if err := s.ensureSampleDeviceBuffer(steps); err != nil {
-		return nil, err
-	}
-	floatScratch := s.ensureSampleScratch(steps)
-	floatSize := int(unsafe.Sizeof(float32(0)))
-	for step := 0; step < steps; step++ {
-		if _, err := s.queue.EnqueueNDRangeKernel(s.kernel, nil, global, nil, nil); err != nil {
-			return nil, fmt.Errorf("enqueueing kernel: %w", err)
-		}
-		if s.wallCount > 0 {
-			if _, err := s.queue.EnqueueNDRangeKernel(s.zeroWallsKernel, nil, []int{s.wallCount}, nil, nil); err != nil {
-				return nil, fmt.Errorf("clearing walls: %w", err)
-			}
-		}
-		if s.height > 1 {
-			if _, err := s.queue.EnqueueNDRangeKernel(s.boundaryRowKernel, nil, []int{s.width}, nil, nil); err != nil {
-				return nil, fmt.Errorf("applying boundary rows: %w", err)
-			}
-		}
-		if s.height > 2 {
-			if _, err := s.queue.EnqueueNDRangeKernel(s.boundaryColKernel, nil, []int{s.height - 2}, nil, nil); err != nil {
-				return nil, fmt.Errorf("applying boundary columns: %w", err)
-			}
-		}
-		s.prevBuf, s.currBuf, s.nextBuf = s.currBuf, s.nextBuf, s.prevBuf
-		if err := s.bindDynamicBuffers(); err != nil {
-			return nil, fmt.Errorf("updating buffers: %w", err)
-		}
-		if _, err := s.queue.EnqueueCopyBuffer(s.currBuf, s.sampleDeviceBuf, s.sampleOffset, step*floatSize, floatSize, nil); err != nil {
-			return nil, fmt.Errorf("copying sample value: %w", err)
-		}
-	}
-	if _, err := s.queue.EnqueueReadBufferFloat32(s.sampleDeviceBuf, true, 0, floatScratch, nil); err != nil {
-		return nil, fmt.Errorf("reading sample buffer: %w", err)
-	}
-	for i := range samples {
-		samples[i] = floatToPCM16(floatScratch[i])
-	}
+            if _, err := s.queue.EnqueueWriteBuffer(s.wallIndexBuf, false, 0, byteLen, ptr, nil); err != nil {
+                return fmt.Errorf("writing wall index buffer: %w", err)
+            }
+        } else {
+            s.wallCount = 0
+        }
+        if err := s.zeroWallsKernel.SetArgInt32(2, int32(s.wallCount)); err != nil {
+            return fmt.Errorf("setting wall count: %w", err)
+        }
+        s.wallsSynced = true
+    } else {
+        if err := s.zeroWallsKernel.SetArgInt32(2, int32(s.wallCount)); err != nil {
+            return fmt.Errorf("refreshing wall count: %w", err)
+        }
+    }
+    if err := s.bindDynamicBuffers(); err != nil {
+        return fmt.Errorf("binding buffers: %w", err)
+    }
+    global := []int{size}
+    for step := 0; step < steps; step++ {
+        if _, err := s.queue.EnqueueNDRangeKernel(s.kernel, nil, global, nil, nil); err != nil {
+            return fmt.Errorf("enqueueing kernel: %w", err)
+        }
+        if s.wallCount > 0 {
+            if _, err := s.queue.EnqueueNDRangeKernel(s.zeroWallsKernel, nil, []int{s.wallCount}, nil, nil); err != nil {
+                return fmt.Errorf("clearing walls: %w", err)
+            }
+        }
+        if s.height > 1 {
+            if _, err := s.queue.EnqueueNDRangeKernel(s.boundaryRowKernel, nil, []int{s.width}, nil, nil); err != nil {
+                return fmt.Errorf("applying boundary rows: %w", err)
+            }
+        }
+        if s.height > 2 {
+            if _, err := s.queue.EnqueueNDRangeKernel(s.boundaryColKernel, nil, []int{s.height - 2}, nil, nil); err != nil {
+                return fmt.Errorf("applying boundary columns: %w", err)
+            }
+        }
+        s.prevBuf, s.currBuf, s.nextBuf = s.currBuf, s.nextBuf, s.prevBuf
+        if err := s.bindDynamicBuffers(); err != nil {
+            return fmt.Errorf("updating buffers: %w", err)
+        }
+    }
     if _, err := s.queue.EnqueueReadBufferFloat32(s.currBuf, true, 0, field.curr, nil); err != nil {
-        return nil, fmt.Errorf("reading current buffer: %w", err)
+        return fmt.Errorf("reading current buffer: %w", err)
     }
     if _, err := s.queue.EnqueueReadBufferFloat32(s.prevBuf, true, 0, field.prev, nil); err != nil {
-        return nil, fmt.Errorf("reading previous buffer: %w", err)
+        return fmt.Errorf("reading previous buffer: %w", err)
     }
     // No need to read back next buffer; CPU path doesn't require it between frames.
     // It will be regenerated by either GPU or CPU on subsequent steps.
     s.coldStart = false
-    return samples, nil
+    return nil
 }
 
 func (s *openCLWaveSolver) Close() {
@@ -554,11 +475,6 @@ func (s *openCLWaveSolver) Close() {
 	if s.boundaryColKernel != nil {
 		s.boundaryColKernel.Release()
 		s.boundaryColKernel = nil
-	}
-	if s.sampleDeviceBuf != nil {
-		s.sampleDeviceBuf.Release()
-		s.sampleDeviceBuf = nil
-		s.sampleDeviceCap = 0
 	}
 	if s.program != nil {
 		s.program.Release()

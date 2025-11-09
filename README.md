@@ -13,15 +13,14 @@ sudo apt install -y build-essential pkg-config git
 ```
 
 ### 2. Ebiten native libraries
-Ebiten relies on OpenGL, X11, and ALSA. Install the development headers so the Go compiler can link against them:
+Ebiten relies on OpenGL and X11. Install the development headers so the Go compiler can link against them:
 
 ```bash
-sudo apt install -y libgl1-mesa-dev xorg-dev libasound2-dev
+sudo apt install -y libgl1-mesa-dev xorg-dev
 ```
 
 - `libgl1-mesa-dev`: OpenGL headers and libraries for rendering.
 - `xorg-dev`: X11 development headers required for window creation.
-- `libasound2-dev`: ALSA development files for audio output.
 
 ### 3. OpenCL toolchain
 To build with the OpenCL backend you need the ICD loader, headers, and diagnostic tools:

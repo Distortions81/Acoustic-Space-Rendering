@@ -1,20 +1,18 @@
 package main
 
 import (
-	"io"
-	"log"
-	"math"
-	"math/rand"
-	"sync"
-	"time"
+    "log"
+    "math"
+    "math/rand"
+    "sync"
+    "time"
 
-	"github.com/hajimehoshi/ebiten/v2"
-	"github.com/hajimehoshi/ebiten/v2/audio"
+    "github.com/hajimehoshi/ebiten/v2"
 )
 
 // Game encapsulates the full simulation state, rendering buffers, and audio pipeline.
 type Game struct {
-	field *waveField
+    field *waveField
 
 	ex float64
 	ey float64
@@ -40,8 +38,7 @@ type Game struct {
 	listenerForwardY float64
 
 	pixelBuf              []byte
-	latestPressureSamples []int16
-	pressureSampleIndex   int
+    // audio removed
 
 	autoWalk           bool
 	autoWalkDeadline   time.Time
@@ -58,15 +55,6 @@ type Game struct {
 	gpuSolver      *openCLWaveSolver
 	workersStarted bool
 
-	audioCtx       *audio.Context
-	audioPlayer    *audio.Player
-	audioPipe      *io.PipeWriter
-	audioPCM       []int16
-	audioWriteBuf  []byte
-	audioElapsed   float64
-	audioNextTime  float64
-	audioSampleDur float64
-	audioDisabled  bool
 }
 
 // newGame constructs a fully initialized Game instance.
@@ -74,36 +62,31 @@ func newGame(workerCount int, enableOpenCL bool) *Game {
 	if workerCount < 1 {
 		workerCount = 1
 	}
-	sampleIndex := defaultPressureSampleIndex(w, h)
-	g := &Game{
-		field:               newWaveField(w, h),
-		ex:                  float64(w / 2),
-		ey:                  float64(h / 2),
-		levelRand:           rand.New(rand.NewSource(time.Now().UnixNano() + 1)),
-		walls:               make([]bool, w*h),
-		workerCount:         workerCount,
-		listenerForwardX:    0,
-		listenerForwardY:    -1,
-		pixelBuf:            make([]byte, w*h*4),
-		autoWalkRand:        rand.New(rand.NewSource(time.Now().UnixNano() + 2)),
-		simStepMultiplier:   defaultSimMultiplier,
-		adaptiveStepScaling: *adaptiveStepScalingFlag,
-		maxStepBurst:        *maxStepBurstFlag,
-		pressureSampleIndex: sampleIndex,
-		audioDisabled:       *disableAudioFlag,
-	}
+    g := &Game{
+        field:               newWaveField(w, h),
+        ex:                  float64(w / 2),
+        ey:                  float64(h / 2),
+        levelRand:           rand.New(rand.NewSource(time.Now().UnixNano() + 1)),
+        walls:               make([]bool, w*h),
+        workerCount:         workerCount,
+        listenerForwardX:    0,
+        listenerForwardY:    -1,
+        pixelBuf:            make([]byte, w*h*4),
+        autoWalkRand:        rand.New(rand.NewSource(time.Now().UnixNano() + 2)),
+        simStepMultiplier:   defaultSimMultiplier,
+        adaptiveStepScaling: *adaptiveStepScalingFlag,
+        maxStepBurst:        *maxStepBurstFlag,
+    }
 	g.workerCond = sync.NewCond(&g.workerMu)
-	if !g.audioDisabled {
-		g.initAudio()
-	}
-	if enableOpenCL {
-		if solver, err := newOpenCLWaveSolver(w, h, sampleIndex); err != nil {
-			log.Printf("OpenCL initialization failed: %v", err)
-		} else {
-			log.Printf("OpenCL solver enabled (device: %s)", solver.DeviceName())
-			g.gpuSolver = solver
-		}
-	}
+    // Audio removed
+    if enableOpenCL {
+        if solver, err := newOpenCLWaveSolver(w, h); err != nil {
+            log.Printf("OpenCL initialization failed: %v", err)
+        } else {
+            log.Printf("OpenCL solver enabled (device: %s)", solver.DeviceName())
+            g.gpuSolver = solver
+        }
+    }
 	if g.gpuSolver == nil {
 		g.startWorkers()
 	}
@@ -178,41 +161,23 @@ func (g *Game) Update() error {
 		g.physicsAccumulator = 0
 	}
 	simStart := time.Now()
-	var producedSamples []int16
-	if g.gpuSolver != nil {
-		samples, err := g.gpuSolver.Step(g.field, g.walls, steps, false)
-		if err != nil {
-			log.Printf("OpenCL solver error: %v; falling back to CPU", err)
-			g.gpuSolver.Close()
-			g.gpuSolver = nil
-			g.startWorkers()
-			g.stepWaveCPUBatch(steps)
-		} else {
-			g.setPressureSamples(samples)
-		}
-	} else {
-		g.stepWaveCPUBatch(steps)
-	}
-	if !g.audioDisabled {
-		producedSamples = g.latestPressureSamples
-	}
-	g.lastSimDuration = time.Since(simStart)
-
-	if !g.audioDisabled && producedSamples != nil {
-		sourceRate := g.simStepsPerSecond()
-		actual := ebiten.ActualTPS()
-		if actual < 1 {
-			actual = defaultTPS
-		}
-		if g.adaptiveStepScaling {
-			sourceRate = float64(steps) * actual
-		}
-		g.streamAudioSamples(producedSamples, sourceRate)
-	}
+    if g.gpuSolver != nil {
+        err := g.gpuSolver.Step(g.field, g.walls, steps, false)
+        if err != nil {
+            log.Printf("OpenCL solver error: %v; falling back to CPU", err)
+            g.gpuSolver.Close()
+            g.gpuSolver = nil
+            g.startWorkers()
+            g.stepWaveCPUBatch(steps)
+        }
+    } else {
+        g.stepWaveCPUBatch(steps)
+    }
+    g.lastSimDuration = time.Since(simStart)
 
 	if *occludeLineOfSightFlag {
 		g.refreshVisibleMask()
 	}
 
-	return nil
+    return nil
 }
