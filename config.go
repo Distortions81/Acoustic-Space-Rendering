@@ -24,7 +24,7 @@ const (
 	defaultBoundaryReflect = 0.4
 	stepImpulseStrength    = 10.0
 	wallSegments           = 40
-	wallMinLen             = 12ss
+	wallMinLen             = 12
 	wallMaxLen             = 300
 	wallExclusionRadius    = 1
 	wallThicknessVariance  = 5
