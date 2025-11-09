@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"strings"
+	"sync"
 	"unsafe"
 
 	"github.com/jgillich/go-opencl/cl"
@@ -43,6 +44,8 @@ type openCLWaveSolver struct {
 	hostPixels              []byte
 	hostWallMask            []byte
 	hostVisibility          []byte
+	pixelMu                 sync.Mutex
+	pixelEvent              *cl.Event
 	uploadedVisibleGen      uint32
 	visibleMaskSynced       bool
 	lastRenderShowWalls     int32
@@ -876,10 +879,17 @@ func (s *openCLWaveSolver) Step(field *waveField, walls []bool, steps int, walls
 	if _, err := s.queue.EnqueueNDRangeKernel(s.renderKernel, nil, global, nil, nil); err != nil {
 		return fmt.Errorf("enqueueing render kernel: %w", err)
 	}
-	if size > 0 {
-		if _, err := s.queue.EnqueueReadBuffer(s.pixelBuf, true, 0, len(s.hostPixels), unsafe.Pointer(&s.hostPixels[0]), nil); err != nil {
-			return fmt.Errorf("reading pixel buffer: %w", err)
+	if size > 0 && len(s.hostPixels) > 0 {
+		event, err := s.queue.EnqueueReadBuffer(s.pixelBuf, false, 0, len(s.hostPixels), unsafe.Pointer(&s.hostPixels[0]), nil)
+		if err != nil {
+			return fmt.Errorf("queueing pixel read: %w", err)
 		}
+		s.pixelMu.Lock()
+		if s.pixelEvent != nil {
+			s.pixelEvent.Release()
+		}
+		s.pixelEvent = event
+		s.pixelMu.Unlock()
 	}
 	if s.debugVerify && size > 0 {
 		if _, err := s.queue.EnqueueReadBufferFloat32(s.currBuf, true, 0, field.curr, nil); err != nil {
@@ -895,6 +905,9 @@ func (s *openCLWaveSolver) Step(field *waveField, walls []bool, steps int, walls
 }
 
 func (s *openCLWaveSolver) Close() {
+	if err := s.waitForPixelEvent(); err != nil {
+		fmt.Printf("waiting for pending pixel read during close: %v\n", err)
+	}
 	if s.pixelBuf != nil {
 		s.pixelBuf.Release()
 		s.pixelBuf = nil
@@ -974,5 +987,20 @@ func (s *openCLWaveSolver) DeviceName() string {
 }
 
 func (s *openCLWaveSolver) PixelBytes() []byte {
+	if err := s.waitForPixelEvent(); err != nil {
+		fmt.Printf("waiting for pixel readback: %v\n", err)
+	}
 	return s.hostPixels
+}
+
+func (s *openCLWaveSolver) waitForPixelEvent() error {
+	s.pixelMu.Lock()
+	event := s.pixelEvent
+	s.pixelEvent = nil
+	s.pixelMu.Unlock()
+	if event == nil {
+		return nil
+	}
+	defer event.Release()
+	return cl.WaitForEvents([]*cl.Event{event})
 }
