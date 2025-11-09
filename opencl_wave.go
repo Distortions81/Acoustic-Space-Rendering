@@ -574,6 +574,20 @@ func (s *openCLWaveSolver) ensureDebugScratch(size int) []float32 {
 	return s.debugScratch
 }
 
+func ensureInt32Slice(buf []int32, size int) []int32 {
+	if cap(buf) < size {
+		return make([]int32, size)
+	}
+	return buf[:size]
+}
+
+func ensureFloat32Slice(buf []float32, size int) []float32 {
+	if cap(buf) < size {
+		return make([]float32, size)
+	}
+	return buf[:size]
+}
+
 func (s *openCLWaveSolver) verifyBufferMatchesSlice(buf *cl.MemObject, host []float32, label string) error {
 	if len(host) == 0 {
 		return nil
@@ -628,30 +642,23 @@ func (s *openCLWaveSolver) applyQueuedImpulses(field *waveField) error {
 	if len(impulses) == 0 {
 		return nil
 	}
-	s.impulseCurrIndices = s.impulseCurrIndices[:0]
-	s.impulseCurrValues = s.impulseCurrValues[:0]
-	s.impulsePrevIndices = s.impulsePrevIndices[:0]
-	s.impulsePrevValues = s.impulsePrevValues[:0]
-	if cap(s.impulseCurrIndices) < len(impulses) {
-		s.impulseCurrIndices = make([]int32, 0, len(impulses))
-	}
-	if cap(s.impulseCurrValues) < len(impulses) {
-		s.impulseCurrValues = make([]float32, 0, len(impulses))
-	}
-	if cap(s.impulsePrevIndices) < len(impulses) {
-		s.impulsePrevIndices = make([]int32, 0, len(impulses))
-	}
-	if cap(s.impulsePrevValues) < len(impulses) {
-		s.impulsePrevValues = make([]float32, 0, len(impulses))
-	}
-	for _, imp := range impulses {
-		s.impulseCurrIndices = append(s.impulseCurrIndices, imp.index)
-		s.impulseCurrValues = append(s.impulseCurrValues, imp.value)
+	count := len(impulses)
+	s.impulseCurrIndices = ensureInt32Slice(s.impulseCurrIndices, count)
+	s.impulseCurrValues = ensureFloat32Slice(s.impulseCurrValues, count)
+	s.impulsePrevIndices = ensureInt32Slice(s.impulsePrevIndices, count)
+	s.impulsePrevValues = ensureFloat32Slice(s.impulsePrevValues, count)
+	prevCount := 0
+	for i, imp := range impulses {
+		s.impulseCurrIndices[i] = imp.index
+		s.impulseCurrValues[i] = imp.value
 		if imp.applyPrev {
-			s.impulsePrevIndices = append(s.impulsePrevIndices, imp.index)
-			s.impulsePrevValues = append(s.impulsePrevValues, imp.value)
+			s.impulsePrevIndices[prevCount] = imp.index
+			s.impulsePrevValues[prevCount] = imp.value
+			prevCount++
 		}
 	}
+	s.impulsePrevIndices = s.impulsePrevIndices[:prevCount]
+	s.impulsePrevValues = s.impulsePrevValues[:prevCount]
 	if err := s.dispatchImpulses(s.currBuf, s.impulseCurrIndices, s.impulseCurrValues); err != nil {
 		return err
 	}
