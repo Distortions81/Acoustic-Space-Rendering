@@ -100,7 +100,7 @@ func (g *Game) Update() error {
 						if g.isWall(cx, cy) {
 							continue
 						}
-						if g.field.setCurr(cx, cy, stepImpulseStrength) {
+						if g.field.queueImpulse(cx, cy, stepImpulseStrength) {
 							impulsesFired = true
 						}
 					}

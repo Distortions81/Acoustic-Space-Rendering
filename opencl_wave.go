@@ -17,6 +17,7 @@ type openCLWaveSolver struct {
 	kernel                  *cl.Kernel
 	renderKernel            *cl.Kernel
 	zeroWallsKernel         *cl.Kernel
+	applyImpulsesKernel     *cl.Kernel
 	boundaryRowKernel       *cl.Kernel
 	boundaryColKernel       *cl.Kernel
 	currBuf                 *cl.MemObject
@@ -26,6 +27,8 @@ type openCLWaveSolver struct {
 	wallMaskBuf             *cl.MemObject
 	visibilityBuf           *cl.MemObject
 	wallIndexBuf            *cl.MemObject
+	impulseIndexBuf         *cl.MemObject
+	impulseValueBuf         *cl.MemObject
 	width                   int
 	height                  int
 	wallIndices             []int32
@@ -89,6 +92,20 @@ __kernel void clear_walls(
     }
     int idx = wall_indices[gid];
     buffer[idx] = 0.0f;
+}
+
+__kernel void apply_impulses(
+    const int count,
+    __global const int* indices,
+    __global const float* values,
+    __global float* buffer)
+{
+    int gid = get_global_id(0);
+    if (gid >= count) {
+        return;
+    }
+    int idx = indices[gid];
+    buffer[idx] = values[gid];
 }
 
 __kernel void apply_boundary_rows(
@@ -251,8 +268,19 @@ func newOpenCLWaveSolver(width, height int) (*openCLWaveSolver, error) {
 		context.Release()
 		return nil, fmt.Errorf("creating wall kernel: %w", err)
 	}
+	applyImpulsesKernel, err := program.CreateKernel("apply_impulses")
+	if err != nil {
+		zeroWallsKernel.Release()
+		renderKernel.Release()
+		kernel.Release()
+		program.Release()
+		queue.Release()
+		context.Release()
+		return nil, fmt.Errorf("creating impulse kernel: %w", err)
+	}
 	boundaryRowKernel, err := program.CreateKernel("apply_boundary_rows")
 	if err != nil {
+		applyImpulsesKernel.Release()
 		zeroWallsKernel.Release()
 		kernel.Release()
 		program.Release()
@@ -262,6 +290,7 @@ func newOpenCLWaveSolver(width, height int) (*openCLWaveSolver, error) {
 	}
 	boundaryColKernel, err := program.CreateKernel("apply_boundary_cols")
 	if err != nil {
+		applyImpulsesKernel.Release()
 		boundaryRowKernel.Release()
 		zeroWallsKernel.Release()
 		kernel.Release()
@@ -275,6 +304,7 @@ func newOpenCLWaveSolver(width, height int) (*openCLWaveSolver, error) {
 	byteSize := size * int(unsafe.Sizeof(float32(0)))
 	currBuf, err := context.CreateEmptyBuffer(cl.MemReadOnly, byteSize)
 	if err != nil {
+		applyImpulsesKernel.Release()
 		kernel.Release()
 		boundaryColKernel.Release()
 		boundaryRowKernel.Release()
@@ -287,6 +317,7 @@ func newOpenCLWaveSolver(width, height int) (*openCLWaveSolver, error) {
 	prevBuf, err := context.CreateEmptyBuffer(cl.MemReadOnly, byteSize)
 	if err != nil {
 		currBuf.Release()
+		applyImpulsesKernel.Release()
 		kernel.Release()
 		boundaryColKernel.Release()
 		boundaryRowKernel.Release()
@@ -300,6 +331,7 @@ func newOpenCLWaveSolver(width, height int) (*openCLWaveSolver, error) {
 	if err != nil {
 		prevBuf.Release()
 		currBuf.Release()
+		applyImpulsesKernel.Release()
 		kernel.Release()
 		renderKernel.Release()
 		boundaryColKernel.Release()
@@ -315,6 +347,7 @@ func newOpenCLWaveSolver(width, height int) (*openCLWaveSolver, error) {
 		nextBuf.Release()
 		prevBuf.Release()
 		currBuf.Release()
+		applyImpulsesKernel.Release()
 		kernel.Release()
 		renderKernel.Release()
 		boundaryColKernel.Release()
@@ -331,6 +364,7 @@ func newOpenCLWaveSolver(width, height int) (*openCLWaveSolver, error) {
 		nextBuf.Release()
 		prevBuf.Release()
 		currBuf.Release()
+		applyImpulsesKernel.Release()
 		kernel.Release()
 		renderKernel.Release()
 		boundaryColKernel.Release()
@@ -348,6 +382,7 @@ func newOpenCLWaveSolver(width, height int) (*openCLWaveSolver, error) {
 		nextBuf.Release()
 		prevBuf.Release()
 		currBuf.Release()
+		applyImpulsesKernel.Release()
 		kernel.Release()
 		renderKernel.Release()
 		boundaryColKernel.Release()
@@ -366,6 +401,7 @@ func newOpenCLWaveSolver(width, height int) (*openCLWaveSolver, error) {
 		nextBuf.Release()
 		prevBuf.Release()
 		currBuf.Release()
+		applyImpulsesKernel.Release()
 		kernel.Release()
 		renderKernel.Release()
 		boundaryColKernel.Release()
@@ -376,6 +412,47 @@ func newOpenCLWaveSolver(width, height int) (*openCLWaveSolver, error) {
 		context.Release()
 		return nil, fmt.Errorf("allocating wall index buffer: %w", err)
 	}
+	impulseIndexBuf, err := context.CreateEmptyBuffer(cl.MemReadOnly, size*int(unsafe.Sizeof(int32(0))))
+	if err != nil {
+		wallIndexBuf.Release()
+		visibilityBuf.Release()
+		wallMaskBuf.Release()
+		pixelBuf.Release()
+		nextBuf.Release()
+		prevBuf.Release()
+		currBuf.Release()
+		applyImpulsesKernel.Release()
+		kernel.Release()
+		renderKernel.Release()
+		boundaryColKernel.Release()
+		boundaryRowKernel.Release()
+		zeroWallsKernel.Release()
+		program.Release()
+		queue.Release()
+		context.Release()
+		return nil, fmt.Errorf("allocating impulse index buffer: %w", err)
+	}
+	impulseValueBuf, err := context.CreateEmptyBuffer(cl.MemReadOnly, size*int(unsafe.Sizeof(float32(0))))
+	if err != nil {
+		impulseIndexBuf.Release()
+		wallIndexBuf.Release()
+		visibilityBuf.Release()
+		wallMaskBuf.Release()
+		pixelBuf.Release()
+		nextBuf.Release()
+		prevBuf.Release()
+		currBuf.Release()
+		applyImpulsesKernel.Release()
+		kernel.Release()
+		renderKernel.Release()
+		boundaryColKernel.Release()
+		boundaryRowKernel.Release()
+		zeroWallsKernel.Release()
+		program.Release()
+		queue.Release()
+		context.Release()
+		return nil, fmt.Errorf("allocating impulse value buffer: %w", err)
+	}
 
 	solver := &openCLWaveSolver{
 		context:                 context,
@@ -384,6 +461,7 @@ func newOpenCLWaveSolver(width, height int) (*openCLWaveSolver, error) {
 		kernel:                  kernel,
 		renderKernel:            renderKernel,
 		zeroWallsKernel:         zeroWallsKernel,
+		applyImpulsesKernel:     applyImpulsesKernel,
 		boundaryRowKernel:       boundaryRowKernel,
 		boundaryColKernel:       boundaryColKernel,
 		currBuf:                 currBuf,
@@ -393,6 +471,8 @@ func newOpenCLWaveSolver(width, height int) (*openCLWaveSolver, error) {
 		wallMaskBuf:             wallMaskBuf,
 		visibilityBuf:           visibilityBuf,
 		wallIndexBuf:            wallIndexBuf,
+		impulseIndexBuf:         impulseIndexBuf,
+		impulseValueBuf:         impulseValueBuf,
 		width:                   width,
 		height:                  height,
 		deviceName:              device.Name(),
@@ -502,6 +582,65 @@ func (s *openCLWaveSolver) verifyBufferMatchesSlice(buf *cl.MemObject, host []fl
 		if diff := math.Abs(float64(scratch[i] - hv)); diff > verifyTolerance {
 			return fmt.Errorf("%s mismatch at index %d: device=%f host=%f diff=%f", label, i, scratch[i], hv, diff)
 		}
+	}
+	return nil
+}
+
+func (s *openCLWaveSolver) dispatchImpulses(target *cl.MemObject, indices []int32, values []float32) error {
+	if len(indices) == 0 {
+		return nil
+	}
+	if len(values) != len(indices) {
+		return fmt.Errorf("impulse data mismatch: %d indices vs %d values", len(indices), len(values))
+	}
+	byteIdx := len(indices) * int(unsafe.Sizeof(int32(0)))
+	if _, err := s.queue.EnqueueWriteBuffer(s.impulseIndexBuf, false, 0, byteIdx, unsafe.Pointer(&indices[0]), nil); err != nil {
+		return fmt.Errorf("uploading impulse indices: %w", err)
+	}
+	byteVal := len(values) * int(unsafe.Sizeof(float32(0)))
+	if _, err := s.queue.EnqueueWriteBuffer(s.impulseValueBuf, false, 0, byteVal, unsafe.Pointer(&values[0]), nil); err != nil {
+		return fmt.Errorf("uploading impulse values: %w", err)
+	}
+	if err := s.applyImpulsesKernel.SetArgInt32(0, int32(len(indices))); err != nil {
+		return fmt.Errorf("setting impulse count: %w", err)
+	}
+	if err := s.applyImpulsesKernel.SetArgBuffer(1, s.impulseIndexBuf); err != nil {
+		return fmt.Errorf("binding impulse indices: %w", err)
+	}
+	if err := s.applyImpulsesKernel.SetArgBuffer(2, s.impulseValueBuf); err != nil {
+		return fmt.Errorf("binding impulse values: %w", err)
+	}
+	if err := s.applyImpulsesKernel.SetArgBuffer(3, target); err != nil {
+		return fmt.Errorf("binding impulse target: %w", err)
+	}
+	if _, err := s.queue.EnqueueNDRangeKernel(s.applyImpulsesKernel, nil, []int{len(indices)}, nil, nil); err != nil {
+		return fmt.Errorf("dispatching impulse kernel: %w", err)
+	}
+	return nil
+}
+
+func (s *openCLWaveSolver) applyQueuedImpulses(field *waveField) error {
+	impulses := field.takeImpulses()
+	if len(impulses) == 0 {
+		return nil
+	}
+	currIndices := make([]int32, 0, len(impulses))
+	currValues := make([]float32, 0, len(impulses))
+	prevIndices := make([]int32, 0, len(impulses))
+	prevValues := make([]float32, 0, len(impulses))
+	for _, imp := range impulses {
+		currIndices = append(currIndices, imp.index)
+		currValues = append(currValues, imp.value)
+		if imp.applyPrev {
+			prevIndices = append(prevIndices, imp.index)
+			prevValues = append(prevValues, imp.value)
+		}
+	}
+	if err := s.dispatchImpulses(s.currBuf, currIndices, currValues); err != nil {
+		return err
+	}
+	if err := s.dispatchImpulses(s.prevBuf, prevIndices, prevValues); err != nil {
+		return err
 	}
 	return nil
 }
@@ -625,22 +764,26 @@ func (s *openCLWaveSolver) Step(field *waveField, walls []bool, steps int, walls
 	if len(field.curr) != size || len(field.prev) != size || len(field.next) != size {
 		return fmt.Errorf("unexpected field buffer size")
 	}
-	currDirty := field.currWasModified()
-	skipCurrUpload := !currDirty
-	if currDirty {
+	if s.coldStart && size > 0 {
 		if _, err := s.queue.EnqueueWriteBufferFloat32(s.currBuf, false, 0, field.curr, nil); err != nil {
-			return fmt.Errorf("writing current buffer: %w", err)
+			return fmt.Errorf("initializing current buffer: %w", err)
 		}
-		field.clearCurrDirty()
-	} else if s.debugVerify {
+		if _, err := s.queue.EnqueueWriteBufferFloat32(s.prevBuf, false, 0, field.prev, nil); err != nil {
+			return fmt.Errorf("initializing previous buffer: %w", err)
+		}
+		if _, err := s.queue.EnqueueWriteBufferFloat32(s.nextBuf, false, 0, field.next, nil); err != nil {
+			return fmt.Errorf("initializing next buffer: %w", err)
+		}
+	}
+	if err := s.applyQueuedImpulses(field); err != nil {
+		return fmt.Errorf("applying impulses: %w", err)
+	}
+	if s.debugVerify {
 		if err := s.verifyBufferMatchesSlice(s.currBuf, field.curr, "pre-step curr"); err != nil {
 			return err
 		}
-	}
-	// Avoid re-uploading previous buffer after the initial frame; device keeps it updated.
-	if s.coldStart {
-		if _, err := s.queue.EnqueueWriteBufferFloat32(s.prevBuf, false, 0, field.prev, nil); err != nil {
-			return fmt.Errorf("writing previous buffer: %w", err)
+		if err := s.verifyBufferMatchesSlice(s.prevBuf, field.prev, "pre-step prev"); err != nil {
+			return err
 		}
 	}
 	if !s.wallsSynced || wallsDirty {
@@ -680,7 +823,6 @@ func (s *openCLWaveSolver) Step(field *waveField, walls []bool, steps int, walls
 		useVisibility = true
 	}
 	global := []int{size}
-	didSwap := false
 	for step := 0; step < steps; step++ {
 		if err := s.bindDynamicBuffers(); err != nil {
 			return fmt.Errorf("binding buffers: %w", err)
@@ -704,7 +846,6 @@ func (s *openCLWaveSolver) Step(field *waveField, walls []bool, steps int, walls
 			}
 		}
 		s.prevBuf, s.currBuf, s.nextBuf = s.currBuf, s.nextBuf, s.prevBuf
-		didSwap = true
 	}
 	if err := s.setRenderFlags(showWalls, useVisibility); err != nil {
 		return fmt.Errorf("configuring render overlays: %w", err)
@@ -717,22 +858,12 @@ func (s *openCLWaveSolver) Step(field *waveField, walls []bool, steps int, walls
 			return fmt.Errorf("reading pixel buffer: %w", err)
 		}
 	}
-	if _, err := s.queue.EnqueueReadBufferFloat32(s.currBuf, true, 0, field.curr, nil); err != nil {
-		return fmt.Errorf("reading current buffer: %w", err)
-	}
-	if didSwap {
+	if s.debugVerify && size > 0 {
+		if _, err := s.queue.EnqueueReadBufferFloat32(s.currBuf, true, 0, field.curr, nil); err != nil {
+			return fmt.Errorf("reading current buffer for debug: %w", err)
+		}
 		if _, err := s.queue.EnqueueReadBufferFloat32(s.prevBuf, true, 0, field.prev, nil); err != nil {
-			return fmt.Errorf("reading previous buffer: %w", err)
-		}
-	}
-	if skipCurrUpload && s.debugVerify {
-		if err := s.verifyBufferMatchesSlice(s.currBuf, field.curr, "post-step curr"); err != nil {
-			return err
-		}
-		if didSwap {
-			if err := s.verifyBufferMatchesSlice(s.prevBuf, field.prev, "post-step prev"); err != nil {
-				return err
-			}
+			return fmt.Errorf("reading previous buffer for debug: %w", err)
 		}
 	}
 	// No need to read back next buffer; it will be regenerated on subsequent steps.
@@ -757,6 +888,14 @@ func (s *openCLWaveSolver) Close() {
 		s.wallIndexBuf.Release()
 		s.wallIndexBuf = nil
 	}
+	if s.impulseValueBuf != nil {
+		s.impulseValueBuf.Release()
+		s.impulseValueBuf = nil
+	}
+	if s.impulseIndexBuf != nil {
+		s.impulseIndexBuf.Release()
+		s.impulseIndexBuf = nil
+	}
 	if s.nextBuf != nil {
 		s.nextBuf.Release()
 		s.nextBuf = nil
@@ -780,6 +919,10 @@ func (s *openCLWaveSolver) Close() {
 	if s.zeroWallsKernel != nil {
 		s.zeroWallsKernel.Release()
 		s.zeroWallsKernel = nil
+	}
+	if s.applyImpulsesKernel != nil {
+		s.applyImpulsesKernel.Release()
+		s.applyImpulsesKernel = nil
 	}
 	if s.boundaryRowKernel != nil {
 		s.boundaryRowKernel.Release()
