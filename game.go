@@ -5,8 +5,6 @@ import (
 	"math"
 	"math/rand"
 	"time"
-
-	"github.com/hajimehoshi/ebiten/v2"
 )
 
 // Game encapsulates the full simulation state, rendering buffers, and audio pipeline.
@@ -16,12 +14,9 @@ type Game struct {
 	ex float64
 	ey float64
 
-	stepTimer           int
-	physicsAccumulator  float64
-	lastSimDuration     time.Duration
-	simStepMultiplier   int
-	adaptiveStepScaling bool
-	maxStepBurst        int
+	stepTimer         int
+	lastSimDuration   time.Duration
+	simStepMultiplier int
 
 	walls     []bool
 	levelRand *rand.Rand
@@ -48,17 +43,15 @@ type Game struct {
 // newGame constructs a fully initialized Game instance.
 func newGame() *Game {
 	g := &Game{
-		field:               newWaveField(w, h),
-		ex:                  float64(w / 2),
-		ey:                  float64(h / 2),
-		levelRand:           rand.New(rand.NewSource(time.Now().UnixNano() + 1)),
-		walls:               make([]bool, w*h),
-		listenerForwardX:    0,
-		listenerForwardY:    -1,
-		autoWalkRand:        rand.New(rand.NewSource(time.Now().UnixNano() + 2)),
-		simStepMultiplier:   defaultSimMultiplier,
-		adaptiveStepScaling: *adaptiveStepScalingFlag,
-		maxStepBurst:        *maxStepBurstFlag,
+		field:             newWaveField(w, h),
+		ex:                float64(w / 2),
+		ey:                float64(h / 2),
+		levelRand:         rand.New(rand.NewSource(time.Now().UnixNano() + 1)),
+		walls:             make([]bool, w*h),
+		listenerForwardX:  0,
+		listenerForwardY:  -1,
+		autoWalkRand:      rand.New(rand.NewSource(time.Now().UnixNano() + 2)),
+		simStepMultiplier: defaultSimMultiplier,
 	}
 	// Audio removed
 	if solver, err := newOpenCLWaveSolver(w, h); err != nil {
@@ -119,28 +112,7 @@ func (g *Game) Update() error {
 
 	g.impulsesActive = impulsesFired
 
-	actualTPS := ebiten.ActualTPS()
-	if actualTPS < 1 {
-		actualTPS = defaultTPS
-	}
-	baseSteps := g.simStepMultiplier
-	steps := baseSteps
-	if g.adaptiveStepScaling {
-		g.physicsAccumulator += g.simStepsPerSecond() / actualTPS
-		steps = int(g.physicsAccumulator)
-		if steps < 1 {
-			steps = 1
-		}
-		if g.maxStepBurst > 0 {
-			burstLimit := baseSteps * g.maxStepBurst
-			if steps > burstLimit {
-				steps = burstLimit
-			}
-		}
-		g.physicsAccumulator -= float64(steps)
-	} else {
-		g.physicsAccumulator = 0
-	}
+	steps := g.simStepMultiplier
 	simStart := time.Now()
 	if err := g.gpuSolver.Step(g.field, g.walls, steps, false); err != nil {
 		return err

@@ -25,11 +25,5 @@ var (
 	// debugFlag enables the FPS and simulation overlay.
 	debugFlag = flag.Bool("debug", false, "show FPS and simulation speed overlay")
 
-	// adaptiveStepScalingFlag enables scaling physics work with ActualTPS.
-	adaptiveStepScalingFlag = flag.Bool("scale-steps-with-tps", false, "scale the per-frame physics work based on ActualTPS instead of using a fixed batch size")
-
-	// maxStepBurstFlag limits how aggressively the simulation catches up.
-	maxStepBurstFlag = flag.Int("max-step-burst", 4, "maximum multiple of the base physics step count to execute when recovering from lag while step scaling is enabled (0 disables the clamp)")
-
 	verifyOpenCLSyncFlag = flag.Bool("verify-opencl-sync", false, "compare OpenCL buffers before/after simulation steps when skipping host uploads")
 )
