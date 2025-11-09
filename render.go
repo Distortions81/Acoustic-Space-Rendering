@@ -14,30 +14,6 @@ func (g *Game) Draw(screen *ebiten.Image) {
 	if g.gpuSolver != nil {
 		pixels := g.gpuSolver.PixelBytes()
 		if len(pixels) == w*h*4 {
-			if *occludeLineOfSightFlag && len(g.visibleStamp) == w*h {
-				for i := range g.visibleStamp {
-					if g.visibleStamp[i] == g.visibleGen {
-						continue
-					}
-					base := i * 4
-					pixels[base] = 0
-					pixels[base+1] = 0
-					pixels[base+2] = 0
-					pixels[base+3] = 255
-				}
-			}
-			if *showWallsFlag && len(g.walls) == w*h {
-				for i, wall := range g.walls {
-					if !wall {
-						continue
-					}
-					base := i * 4
-					pixels[base] = 30
-					pixels[base+1] = 40
-					pixels[base+2] = 80
-					pixels[base+3] = 255
-				}
-			}
 			screen.WritePixels(pixels)
 		}
 	}

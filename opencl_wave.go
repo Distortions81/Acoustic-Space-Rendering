@@ -11,32 +11,41 @@ import (
 )
 
 type openCLWaveSolver struct {
-	context           *cl.Context
-	queue             *cl.CommandQueue
-	program           *cl.Program
-	kernel            *cl.Kernel
-	renderKernel      *cl.Kernel
-	zeroWallsKernel   *cl.Kernel
-	boundaryRowKernel *cl.Kernel
-	boundaryColKernel *cl.Kernel
-	currBuf           *cl.MemObject
-	prevBuf           *cl.MemObject
-	nextBuf           *cl.MemObject
-	pixelBuf          *cl.MemObject
-	wallIndexBuf      *cl.MemObject
-	width             int
-	height            int
-	wallIndices       []int32
-	wallCount         int
-	wallsSynced       bool
-	deviceName        string
-	coldStart         bool
-	boundCurr         *cl.MemObject
-	boundPrev         *cl.MemObject
-	boundNext         *cl.MemObject
-	hostPixels        []byte
-	debugVerify       bool
-	debugScratch      []float32
+	context                 *cl.Context
+	queue                   *cl.CommandQueue
+	program                 *cl.Program
+	kernel                  *cl.Kernel
+	renderKernel            *cl.Kernel
+	zeroWallsKernel         *cl.Kernel
+	boundaryRowKernel       *cl.Kernel
+	boundaryColKernel       *cl.Kernel
+	currBuf                 *cl.MemObject
+	prevBuf                 *cl.MemObject
+	nextBuf                 *cl.MemObject
+	pixelBuf                *cl.MemObject
+	wallMaskBuf             *cl.MemObject
+	visibilityBuf           *cl.MemObject
+	wallIndexBuf            *cl.MemObject
+	width                   int
+	height                  int
+	wallIndices             []int32
+	wallCount               int
+	wallsSynced             bool
+	wallMaskSynced          bool
+	deviceName              string
+	coldStart               bool
+	boundCurr               *cl.MemObject
+	boundPrev               *cl.MemObject
+	boundNext               *cl.MemObject
+	hostPixels              []byte
+	hostWallMask            []byte
+	hostVisibility          []byte
+	uploadedVisibleGen      uint32
+	visibleMaskSynced       bool
+	lastRenderShowWalls     int32
+	lastRenderUseVisibility int32
+	debugVerify             bool
+	debugScratch            []float32
 }
 
 const verifyTolerance = 1e-4
@@ -123,6 +132,10 @@ __kernel void render_intensity(
     const int width,
     const int height,
     __global const float* curr,
+    const int show_walls,
+    __global const uchar* wall_mask,
+    const int use_visibility,
+    __global const uchar* visibility_mask,
     __global uchar4* pixels)
 {
     int idx = get_global_id(0);
@@ -133,7 +146,22 @@ __kernel void render_intensity(
     float value = curr[idx];
     value = fmin(fmax(value, -1.0f), 1.0f);
     uchar intensity = (uchar)(fabs(value) * 255.0f);
-    pixels[idx] = (uchar4)(intensity, intensity, intensity, (uchar)255);
+    uchar4 color = (uchar4)(intensity, intensity, intensity, (uchar)255);
+    if (use_visibility) {
+        if (!visibility_mask[idx]) {
+            color.x = 0;
+            color.y = 0;
+            color.z = 0;
+        }
+    }
+    if (show_walls) {
+        if (wall_mask[idx]) {
+            color.x = 30;
+            color.y = 40;
+            color.z = 80;
+        }
+    }
+    pixels[idx] = color;
 }`
 
 func newOpenCLWaveSolver(width, height int) (*openCLWaveSolver, error) {
@@ -297,12 +325,47 @@ func newOpenCLWaveSolver(width, height int) (*openCLWaveSolver, error) {
 		context.Release()
 		return nil, fmt.Errorf("allocating pixel buffer: %w", err)
 	}
-	wallIndexBuf, err := context.CreateEmptyBuffer(cl.MemReadOnly, size*int(unsafe.Sizeof(int32(0))))
+	wallMaskBuf, err := context.CreateEmptyBuffer(cl.MemReadOnly, size)
 	if err != nil {
+		pixelBuf.Release()
 		nextBuf.Release()
 		prevBuf.Release()
 		currBuf.Release()
+		kernel.Release()
+		renderKernel.Release()
+		boundaryColKernel.Release()
+		boundaryRowKernel.Release()
+		zeroWallsKernel.Release()
+		program.Release()
+		queue.Release()
+		context.Release()
+		return nil, fmt.Errorf("allocating wall mask buffer: %w", err)
+	}
+	visibilityBuf, err := context.CreateEmptyBuffer(cl.MemReadOnly, size)
+	if err != nil {
+		wallMaskBuf.Release()
 		pixelBuf.Release()
+		nextBuf.Release()
+		prevBuf.Release()
+		currBuf.Release()
+		kernel.Release()
+		renderKernel.Release()
+		boundaryColKernel.Release()
+		boundaryRowKernel.Release()
+		zeroWallsKernel.Release()
+		program.Release()
+		queue.Release()
+		context.Release()
+		return nil, fmt.Errorf("allocating visibility buffer: %w", err)
+	}
+	wallIndexBuf, err := context.CreateEmptyBuffer(cl.MemReadOnly, size*int(unsafe.Sizeof(int32(0))))
+	if err != nil {
+		visibilityBuf.Release()
+		wallMaskBuf.Release()
+		pixelBuf.Release()
+		nextBuf.Release()
+		prevBuf.Release()
+		currBuf.Release()
 		kernel.Release()
 		renderKernel.Release()
 		boundaryColKernel.Release()
@@ -315,25 +378,31 @@ func newOpenCLWaveSolver(width, height int) (*openCLWaveSolver, error) {
 	}
 
 	solver := &openCLWaveSolver{
-		context:           context,
-		queue:             queue,
-		program:           program,
-		kernel:            kernel,
-		renderKernel:      renderKernel,
-		zeroWallsKernel:   zeroWallsKernel,
-		boundaryRowKernel: boundaryRowKernel,
-		boundaryColKernel: boundaryColKernel,
-		currBuf:           currBuf,
-		prevBuf:           prevBuf,
-		nextBuf:           nextBuf,
-		pixelBuf:          pixelBuf,
-		wallIndexBuf:      wallIndexBuf,
-		width:             width,
-		height:            height,
-		deviceName:        device.Name(),
-		coldStart:         true,
-		hostPixels:        make([]byte, size*4),
-		debugVerify:       verifyOpenCLSyncFlag != nil && *verifyOpenCLSyncFlag,
+		context:                 context,
+		queue:                   queue,
+		program:                 program,
+		kernel:                  kernel,
+		renderKernel:            renderKernel,
+		zeroWallsKernel:         zeroWallsKernel,
+		boundaryRowKernel:       boundaryRowKernel,
+		boundaryColKernel:       boundaryColKernel,
+		currBuf:                 currBuf,
+		prevBuf:                 prevBuf,
+		nextBuf:                 nextBuf,
+		pixelBuf:                pixelBuf,
+		wallMaskBuf:             wallMaskBuf,
+		visibilityBuf:           visibilityBuf,
+		wallIndexBuf:            wallIndexBuf,
+		width:                   width,
+		height:                  height,
+		deviceName:              device.Name(),
+		coldStart:               true,
+		hostPixels:              make([]byte, size*4),
+		hostWallMask:            make([]byte, size),
+		hostVisibility:          make([]byte, size),
+		lastRenderShowWalls:     -1,
+		lastRenderUseVisibility: -1,
+		debugVerify:             verifyOpenCLSyncFlag != nil && *verifyOpenCLSyncFlag,
 	}
 
 	if err := solver.kernel.SetArgs(
@@ -352,6 +421,10 @@ func newOpenCLWaveSolver(width, height int) (*openCLWaveSolver, error) {
 		int32(width),
 		int32(height),
 		solver.currBuf,
+		int32(0),
+		solver.wallMaskBuf,
+		int32(0),
+		solver.visibilityBuf,
 		solver.pixelBuf,
 	); err != nil {
 		solver.Close()
@@ -467,7 +540,84 @@ func (s *openCLWaveSolver) bindDynamicBuffers() error {
 	return nil
 }
 
-func (s *openCLWaveSolver) Step(field *waveField, walls []bool, steps int, wallsDirty bool) error {
+func (s *openCLWaveSolver) refreshWallMask(walls []bool) error {
+	size := s.width * s.height
+	if len(walls) != size {
+		s.wallMaskSynced = false
+		return nil
+	}
+	for i, wall := range walls {
+		if wall {
+			s.hostWallMask[i] = 1
+		} else {
+			s.hostWallMask[i] = 0
+		}
+	}
+	if size == 0 {
+		s.wallMaskSynced = true
+		return nil
+	}
+	if _, err := s.queue.EnqueueWriteBuffer(s.wallMaskBuf, false, 0, size, unsafe.Pointer(&s.hostWallMask[0]), nil); err != nil {
+		return fmt.Errorf("writing wall mask buffer: %w", err)
+	}
+	s.wallMaskSynced = true
+	return nil
+}
+
+func (s *openCLWaveSolver) refreshVisibilityMask(stamp []uint32, gen uint32) error {
+	size := s.width * s.height
+	if len(stamp) != size {
+		s.visibleMaskSynced = false
+		return nil
+	}
+	if s.visibleMaskSynced && s.uploadedVisibleGen == gen {
+		return nil
+	}
+	for i, value := range stamp {
+		if value == gen {
+			s.hostVisibility[i] = 1
+		} else {
+			s.hostVisibility[i] = 0
+		}
+	}
+	if size == 0 {
+		s.visibleMaskSynced = true
+		s.uploadedVisibleGen = gen
+		return nil
+	}
+	if _, err := s.queue.EnqueueWriteBuffer(s.visibilityBuf, false, 0, size, unsafe.Pointer(&s.hostVisibility[0]), nil); err != nil {
+		return fmt.Errorf("writing visibility buffer: %w", err)
+	}
+	s.visibleMaskSynced = true
+	s.uploadedVisibleGen = gen
+	return nil
+}
+
+func (s *openCLWaveSolver) setRenderFlags(showWalls bool, useVisibility bool) error {
+	show := int32(0)
+	if showWalls {
+		show = 1
+	}
+	if s.lastRenderShowWalls != show {
+		if err := s.renderKernel.SetArgInt32(3, show); err != nil {
+			return err
+		}
+		s.lastRenderShowWalls = show
+	}
+	useVis := int32(0)
+	if useVisibility {
+		useVis = 1
+	}
+	if s.lastRenderUseVisibility != useVis {
+		if err := s.renderKernel.SetArgInt32(5, useVis); err != nil {
+			return err
+		}
+		s.lastRenderUseVisibility = useVis
+	}
+	return nil
+}
+
+func (s *openCLWaveSolver) Step(field *waveField, walls []bool, steps int, wallsDirty bool, showWalls bool, occludeLOS bool, visibleStamp []uint32, visibleGen uint32) error {
 	if steps <= 0 {
 		return nil
 	}
@@ -514,6 +664,21 @@ func (s *openCLWaveSolver) Step(field *waveField, walls []bool, steps int, walls
 			return fmt.Errorf("refreshing wall count: %w", err)
 		}
 	}
+	if !s.wallMaskSynced || wallsDirty {
+		if err := s.refreshWallMask(walls); err != nil {
+			return err
+		}
+	}
+	if showWalls && len(walls) != size {
+		showWalls = false
+	}
+	useVisibility := false
+	if occludeLOS && len(visibleStamp) == size {
+		if err := s.refreshVisibilityMask(visibleStamp, visibleGen); err != nil {
+			return err
+		}
+		useVisibility = true
+	}
 	global := []int{size}
 	didSwap := false
 	for step := 0; step < steps; step++ {
@@ -540,6 +705,9 @@ func (s *openCLWaveSolver) Step(field *waveField, walls []bool, steps int, walls
 		}
 		s.prevBuf, s.currBuf, s.nextBuf = s.currBuf, s.nextBuf, s.prevBuf
 		didSwap = true
+	}
+	if err := s.setRenderFlags(showWalls, useVisibility); err != nil {
+		return fmt.Errorf("configuring render overlays: %w", err)
 	}
 	if _, err := s.queue.EnqueueNDRangeKernel(s.renderKernel, nil, global, nil, nil); err != nil {
 		return fmt.Errorf("enqueueing render kernel: %w", err)
@@ -576,6 +744,14 @@ func (s *openCLWaveSolver) Close() {
 	if s.pixelBuf != nil {
 		s.pixelBuf.Release()
 		s.pixelBuf = nil
+	}
+	if s.visibilityBuf != nil {
+		s.visibilityBuf.Release()
+		s.visibilityBuf = nil
+	}
+	if s.wallMaskBuf != nil {
+		s.wallMaskBuf.Release()
+		s.wallMaskBuf = nil
 	}
 	if s.wallIndexBuf != nil {
 		s.wallIndexBuf.Release()
