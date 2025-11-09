@@ -73,3 +73,4 @@ go run .
 Customize simulation behavior with additional flags:
 
 - `-wall-reflect=<value>` — sets how strongly the outer walls reflect waves. Use a value between 0 (fully absorbing) and 1 (perfect reflection); the default is `0.4`.
+- `-prefer-fp16=<true|false>` — toggles 16-bit OpenCL wave buffers when the GPU advertises `cl_khr_fp16`/`cl_khr_half_float`. Leave enabled to reduce bandwidth on capable devices; set to `false` to force 32-bit floats.

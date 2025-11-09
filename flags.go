@@ -12,6 +12,9 @@ var (
 	// wallReflectFlag adjusts how strongly the simulation boundaries reflect waves.
 	wallReflectFlag = flag.Float64("wall-reflect", defaultBoundaryReflect, "reflection coefficient for map boundaries (0-1)")
 
+	// preferFP16Flag enables 16-bit wave buffers on devices that support half precision.
+	preferFP16Flag = flag.Bool("prefer-fp16", true, "use 16-bit floats for the OpenCL solver when supported")
+
 	// recordDefaultPGO triggers a scripted walk to produce default.pgo.
 	recordDefaultPGO = flag.Bool("record-default-pgo", false, "walk randomly for 15s while capturing default.pgo")
 
