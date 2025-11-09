@@ -42,6 +42,7 @@ const waveKernelSource = `__kernel void wave_step(
     const int height,
     const float damp,
     const float speed,
+    const float reflect,
     __global const float* curr,
     __global const float* prev,
     __global const uchar* walls,
@@ -249,6 +250,7 @@ func newOpenCLWaveSolver(width, height int) (*openCLWaveSolver, error) {
 		int32(height),
 		waveDamp32,
 		waveSpeed32,
+		float32(boundaryReflect),
 		solver.currBuf,
 		solver.prevBuf,
 		solver.wallMaskBuf,
@@ -322,7 +324,7 @@ func (s *openCLWaveSolver) verifyBufferMatchesSlice(buf *cl.MemObject, host []fl
 
 func (s *openCLWaveSolver) bindDynamicBuffers() error {
 	if s.boundCurr != s.currBuf {
-		if err := s.kernel.SetArgBuffer(4, s.currBuf); err != nil {
+		if err := s.kernel.SetArgBuffer(5, s.currBuf); err != nil {
 			return err
 		}
 		if err := s.renderKernel.SetArgBuffer(2, s.currBuf); err != nil {
@@ -331,7 +333,7 @@ func (s *openCLWaveSolver) bindDynamicBuffers() error {
 		s.boundCurr = s.currBuf
 	}
 	if s.boundPrev != s.prevBuf {
-		if err := s.kernel.SetArgBuffer(5, s.prevBuf); err != nil {
+		if err := s.kernel.SetArgBuffer(6, s.prevBuf); err != nil {
 			return err
 		}
 		s.boundPrev = s.prevBuf
