@@ -15,12 +15,14 @@ type openCLWaveSolver struct {
 	queue             *cl.CommandQueue
 	program           *cl.Program
 	kernel            *cl.Kernel
+	renderKernel      *cl.Kernel
 	zeroWallsKernel   *cl.Kernel
 	boundaryRowKernel *cl.Kernel
 	boundaryColKernel *cl.Kernel
 	currBuf           *cl.MemObject
 	prevBuf           *cl.MemObject
 	nextBuf           *cl.MemObject
+	pixelBuf          *cl.MemObject
 	wallIndexBuf      *cl.MemObject
 	width             int
 	height            int
@@ -32,6 +34,7 @@ type openCLWaveSolver struct {
 	boundCurr         *cl.MemObject
 	boundPrev         *cl.MemObject
 	boundNext         *cl.MemObject
+	hostPixels        []byte
 	debugVerify       bool
 	debugScratch      []float32
 }
@@ -114,6 +117,23 @@ __kernel void apply_boundary_cols(
     int right_idx = base + width - 1;
     buffer[left_idx] = -buffer[left_idx + 1] * reflect;
     buffer[right_idx] = -buffer[right_idx - 1] * reflect;
+}
+
+__kernel void render_intensity(
+    const int width,
+    const int height,
+    __global const float* curr,
+    __global uchar4* pixels)
+{
+    int idx = get_global_id(0);
+    int size = width * height;
+    if (idx >= size) {
+        return;
+    }
+    float value = curr[idx];
+    value = fmin(fmax(value, -1.0f), 1.0f);
+    uchar intensity = (uchar)(fabs(value) * 255.0f);
+    pixels[idx] = (uchar4)(intensity, intensity, intensity, (uchar)255);
 }`
 
 func newOpenCLWaveSolver(width, height int) (*openCLWaveSolver, error) {
@@ -186,9 +206,18 @@ func newOpenCLWaveSolver(width, height int) (*openCLWaveSolver, error) {
 		context.Release()
 		return nil, fmt.Errorf("creating OpenCL kernel: %w", err)
 	}
+	renderKernel, err := program.CreateKernel("render_intensity")
+	if err != nil {
+		kernel.Release()
+		program.Release()
+		queue.Release()
+		context.Release()
+		return nil, fmt.Errorf("creating render kernel: %w", err)
+	}
 	zeroWallsKernel, err := program.CreateKernel("clear_walls")
 	if err != nil {
 		kernel.Release()
+		renderKernel.Release()
 		program.Release()
 		queue.Release()
 		context.Release()
@@ -208,6 +237,7 @@ func newOpenCLWaveSolver(width, height int) (*openCLWaveSolver, error) {
 		boundaryRowKernel.Release()
 		zeroWallsKernel.Release()
 		kernel.Release()
+		renderKernel.Release()
 		program.Release()
 		queue.Release()
 		context.Release()
@@ -243,6 +273,7 @@ func newOpenCLWaveSolver(width, height int) (*openCLWaveSolver, error) {
 		prevBuf.Release()
 		currBuf.Release()
 		kernel.Release()
+		renderKernel.Release()
 		boundaryColKernel.Release()
 		boundaryRowKernel.Release()
 		zeroWallsKernel.Release()
@@ -251,12 +282,29 @@ func newOpenCLWaveSolver(width, height int) (*openCLWaveSolver, error) {
 		context.Release()
 		return nil, fmt.Errorf("allocating next buffer: %w", err)
 	}
-	wallIndexBuf, err := context.CreateEmptyBuffer(cl.MemReadOnly, size*int(unsafe.Sizeof(int32(0))))
+	pixelBuf, err := context.CreateEmptyBuffer(cl.MemWriteOnly, size*4)
 	if err != nil {
 		nextBuf.Release()
 		prevBuf.Release()
 		currBuf.Release()
 		kernel.Release()
+		renderKernel.Release()
+		boundaryColKernel.Release()
+		boundaryRowKernel.Release()
+		zeroWallsKernel.Release()
+		program.Release()
+		queue.Release()
+		context.Release()
+		return nil, fmt.Errorf("allocating pixel buffer: %w", err)
+	}
+	wallIndexBuf, err := context.CreateEmptyBuffer(cl.MemReadOnly, size*int(unsafe.Sizeof(int32(0))))
+	if err != nil {
+		nextBuf.Release()
+		prevBuf.Release()
+		currBuf.Release()
+		pixelBuf.Release()
+		kernel.Release()
+		renderKernel.Release()
 		boundaryColKernel.Release()
 		boundaryRowKernel.Release()
 		zeroWallsKernel.Release()
@@ -271,17 +319,20 @@ func newOpenCLWaveSolver(width, height int) (*openCLWaveSolver, error) {
 		queue:             queue,
 		program:           program,
 		kernel:            kernel,
+		renderKernel:      renderKernel,
 		zeroWallsKernel:   zeroWallsKernel,
 		boundaryRowKernel: boundaryRowKernel,
 		boundaryColKernel: boundaryColKernel,
 		currBuf:           currBuf,
 		prevBuf:           prevBuf,
 		nextBuf:           nextBuf,
+		pixelBuf:          pixelBuf,
 		wallIndexBuf:      wallIndexBuf,
 		width:             width,
 		height:            height,
 		deviceName:        device.Name(),
 		coldStart:         true,
+		hostPixels:        make([]byte, size*4),
 		debugVerify:       verifyOpenCLSyncFlag != nil && *verifyOpenCLSyncFlag,
 	}
 
@@ -296,6 +347,15 @@ func newOpenCLWaveSolver(width, height int) (*openCLWaveSolver, error) {
 	); err != nil {
 		solver.Close()
 		return nil, fmt.Errorf("setting kernel arguments: %w", err)
+	}
+	if err := solver.renderKernel.SetArgs(
+		int32(width),
+		int32(height),
+		solver.currBuf,
+		solver.pixelBuf,
+	); err != nil {
+		solver.Close()
+		return nil, fmt.Errorf("setting render kernel arguments: %w", err)
 	}
 	if err := solver.zeroWallsKernel.SetArgs(
 		solver.nextBuf,
@@ -376,6 +436,9 @@ func (s *openCLWaveSolver) verifyBufferMatchesSlice(buf *cl.MemObject, host []fl
 func (s *openCLWaveSolver) bindDynamicBuffers() error {
 	if s.boundCurr != s.currBuf {
 		if err := s.kernel.SetArgBuffer(4, s.currBuf); err != nil {
+			return err
+		}
+		if err := s.renderKernel.SetArgBuffer(2, s.currBuf); err != nil {
 			return err
 		}
 		s.boundCurr = s.currBuf
@@ -478,6 +541,14 @@ func (s *openCLWaveSolver) Step(field *waveField, walls []bool, steps int, walls
 		s.prevBuf, s.currBuf, s.nextBuf = s.currBuf, s.nextBuf, s.prevBuf
 		didSwap = true
 	}
+	if _, err := s.queue.EnqueueNDRangeKernel(s.renderKernel, nil, global, nil, nil); err != nil {
+		return fmt.Errorf("enqueueing render kernel: %w", err)
+	}
+	if size > 0 {
+		if _, err := s.queue.EnqueueReadBuffer(s.pixelBuf, true, 0, len(s.hostPixels), unsafe.Pointer(&s.hostPixels[0]), nil); err != nil {
+			return fmt.Errorf("reading pixel buffer: %w", err)
+		}
+	}
 	if _, err := s.queue.EnqueueReadBufferFloat32(s.currBuf, true, 0, field.curr, nil); err != nil {
 		return fmt.Errorf("reading current buffer: %w", err)
 	}
@@ -502,6 +573,10 @@ func (s *openCLWaveSolver) Step(field *waveField, walls []bool, steps int, walls
 }
 
 func (s *openCLWaveSolver) Close() {
+	if s.pixelBuf != nil {
+		s.pixelBuf.Release()
+		s.pixelBuf = nil
+	}
 	if s.wallIndexBuf != nil {
 		s.wallIndexBuf.Release()
 		s.wallIndexBuf = nil
@@ -521,6 +596,10 @@ func (s *openCLWaveSolver) Close() {
 	if s.kernel != nil {
 		s.kernel.Release()
 		s.kernel = nil
+	}
+	if s.renderKernel != nil {
+		s.renderKernel.Release()
+		s.renderKernel = nil
 	}
 	if s.zeroWallsKernel != nil {
 		s.zeroWallsKernel.Release()
@@ -550,4 +629,8 @@ func (s *openCLWaveSolver) Close() {
 
 func (s *openCLWaveSolver) DeviceName() string {
 	return s.deviceName
+}
+
+func (s *openCLWaveSolver) PixelBytes() []byte {
+	return s.hostPixels
 }

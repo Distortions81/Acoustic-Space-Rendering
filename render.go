@@ -11,39 +11,36 @@ import (
 
 // Draw renders the current wave field, ear indicators, and optional overlays.
 func (g *Game) Draw(screen *ebiten.Image) {
-	if len(g.pixelBuf) != w*h*4 {
-		g.pixelBuf = make([]byte, w*h*4)
-	}
-	img := g.pixelBuf
-	showWalls := *showWallsFlag
-	occludeLOS := *occludeLineOfSightFlag
-	for i := 0; i < w*h; i++ {
-		base := i * 4
-		if occludeLOS && (len(g.visibleStamp) == w*h) && !(g.visibleStamp[i] == g.visibleGen) {
-			img[base] = 0
-			img[base+1] = 0
-			img[base+2] = 0
-			img[base+3] = 255
-			continue
+	if g.gpuSolver != nil {
+		pixels := g.gpuSolver.PixelBytes()
+		if len(pixels) == w*h*4 {
+			if *occludeLineOfSightFlag && len(g.visibleStamp) == w*h {
+				for i := range g.visibleStamp {
+					if g.visibleStamp[i] == g.visibleGen {
+						continue
+					}
+					base := i * 4
+					pixels[base] = 0
+					pixels[base+1] = 0
+					pixels[base+2] = 0
+					pixels[base+3] = 255
+				}
+			}
+			if *showWallsFlag && len(g.walls) == w*h {
+				for i, wall := range g.walls {
+					if !wall {
+						continue
+					}
+					base := i * 4
+					pixels[base] = 30
+					pixels[base+1] = 40
+					pixels[base+2] = 80
+					pixels[base+3] = 255
+				}
+			}
+			screen.WritePixels(pixels)
 		}
-		if showWalls && len(g.walls) > 0 && g.walls[i] {
-			img[base] = 30
-			img[base+1] = 40
-			img[base+2] = 80
-			img[base+3] = 255
-			continue
-		}
-		x := i % w
-		y := i / w
-		v := g.field.readCurr(x, y)
-		v = float32(math.Max(-1, math.Min(1, float64(v))))
-		intensity := byte(math.Abs(float64(v)) * 255)
-		img[base] = intensity
-		img[base+1] = intensity
-		img[base+2] = intensity
-		img[base+3] = 255
 	}
-	screen.WritePixels(img)
 
 	for y := -emitterRad; y <= emitterRad; y++ {
 		for x := -emitterRad; x <= emitterRad; x++ {

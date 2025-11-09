@@ -29,9 +29,6 @@ type Game struct {
 	listenerForwardX float64
 	listenerForwardY float64
 
-	pixelBuf []byte
-	// audio removed
-
 	autoWalk           bool
 	autoWalkDeadline   time.Time
 	autoWalkRand       *rand.Rand
@@ -58,7 +55,6 @@ func newGame() *Game {
 		walls:               make([]bool, w*h),
 		listenerForwardX:    0,
 		listenerForwardY:    -1,
-		pixelBuf:            make([]byte, w*h*4),
 		autoWalkRand:        rand.New(rand.NewSource(time.Now().UnixNano() + 2)),
 		simStepMultiplier:   defaultSimMultiplier,
 		adaptiveStepScaling: *adaptiveStepScalingFlag,
