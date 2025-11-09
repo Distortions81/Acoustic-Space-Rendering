@@ -6,7 +6,7 @@ import "time"
 // application. These values define the grid size and timing for
 // the acoustic wave simulation.
 const (
-	w, h                   = 768, 768
+	w, h                   = 1920, 1080
 	windowScale            = 1
 	damp                   = 0.999
 	speed                  = 0.5
