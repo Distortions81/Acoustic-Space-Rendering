@@ -4,7 +4,6 @@ import (
     "log"
     "math"
     "math/rand"
-    "sync"
     "time"
 
     "github.com/hajimehoshi/ebiten/v2"
@@ -14,8 +13,8 @@ import (
 type Game struct {
     field *waveField
 
-	ex float64
-	ey float64
+    	ex float64
+    	ey float64
 
 	stepTimer           int
 	physicsAccumulator  float64
@@ -24,15 +23,8 @@ type Game struct {
 	adaptiveStepScaling bool
 	maxStepBurst        int
 
-	walls     []bool
-	levelRand *rand.Rand
-
-	workerCount   int
-	workerMasks   []workerMask
-	workerMu      sync.Mutex
-	workerCond    *sync.Cond
-	workerStep    int
-	workerPending int
+    walls     []bool
+    levelRand *rand.Rand
 
 	listenerForwardX float64
 	listenerForwardY float64
@@ -52,23 +44,18 @@ type Game struct {
 	lastVisCX    int
 	lastVisCY    int
 
-	gpuSolver      *openCLWaveSolver
-	workersStarted bool
+    gpuSolver      *openCLWaveSolver
 
 }
 
 // newGame constructs a fully initialized Game instance.
-func newGame(workerCount int, enableOpenCL bool) *Game {
-	if workerCount < 1 {
-		workerCount = 1
-	}
+func newGame() *Game {
     g := &Game{
         field:               newWaveField(w, h),
         ex:                  float64(w / 2),
         ey:                  float64(h / 2),
         levelRand:           rand.New(rand.NewSource(time.Now().UnixNano() + 1)),
         walls:               make([]bool, w*h),
-        workerCount:         workerCount,
         listenerForwardX:    0,
         listenerForwardY:    -1,
         pixelBuf:            make([]byte, w*h*4),
@@ -77,23 +64,16 @@ func newGame(workerCount int, enableOpenCL bool) *Game {
         adaptiveStepScaling: *adaptiveStepScalingFlag,
         maxStepBurst:        *maxStepBurstFlag,
     }
-	g.workerCond = sync.NewCond(&g.workerMu)
     // Audio removed
-    if enableOpenCL {
-        if solver, err := newOpenCLWaveSolver(w, h); err != nil {
-            log.Printf("OpenCL initialization failed: %v", err)
-        } else {
-            log.Printf("OpenCL solver enabled (device: %s)", solver.DeviceName())
-            g.gpuSolver = solver
-        }
+    if solver, err := newOpenCLWaveSolver(w, h); err != nil {
+        log.Fatalf("OpenCL initialization failed: %v", err)
+    } else {
+        log.Printf("OpenCL solver enabled (device: %s)", solver.DeviceName())
+        g.gpuSolver = solver
     }
-	if g.gpuSolver == nil {
-		g.startWorkers()
-	}
-	g.generateWalls()
-	g.rebuildInteriorMask()
-	g.lastVisCX, g.lastVisCY = -1, -1
-	return g
+    g.generateWalls()
+    g.lastVisCX, g.lastVisCY = -1, -1
+    return g
 }
 
 // Update advances the simulation, produces optional audio, and refreshes visibility data.
@@ -160,18 +140,9 @@ func (g *Game) Update() error {
 	} else {
 		g.physicsAccumulator = 0
 	}
-	simStart := time.Now()
-    if g.gpuSolver != nil {
-        err := g.gpuSolver.Step(g.field, g.walls, steps, false)
-        if err != nil {
-            log.Printf("OpenCL solver error: %v; falling back to CPU", err)
-            g.gpuSolver.Close()
-            g.gpuSolver = nil
-            g.startWorkers()
-            g.stepWaveCPUBatch(steps)
-        }
-    } else {
-        g.stepWaveCPUBatch(steps)
+    simStart := time.Now()
+    if err := g.gpuSolver.Step(g.field, g.walls, steps, false); err != nil {
+        return err
     }
     g.lastSimDuration = time.Since(simStart)
 

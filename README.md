@@ -1,6 +1,6 @@
 # Acoustic Space Rendering
 
-This project uses [Ebiten](https://ebiten.org/) for graphics and an optional OpenCL backend for simulation. The instructions below describe how to install the required Ubuntu packages so you can build and run the application with both features enabled.
+This project uses [Ebiten](https://ebiten.org/) for graphics and an OpenCL-backed simulation. OpenCL is now required; follow the steps below to install the necessary Ubuntu packages and build the application. No build tags are needed.
 
 ## Ubuntu dependency setup
 
@@ -22,8 +22,8 @@ sudo apt install -y libgl1-mesa-dev xorg-dev
 - `libgl1-mesa-dev`: OpenGL headers and libraries for rendering.
 - `xorg-dev`: X11 development headers required for window creation.
 
-### 3. OpenCL toolchain
-To build with the OpenCL backend you need the ICD loader, headers, and diagnostic tools:
+### 3. OpenCL toolchain (required)
+Install the OpenCL ICD loader, headers, and diagnostic tool:
 
 ```bash
 sudo apt install -y ocl-icd-opencl-dev opencl-headers clinfo
@@ -35,17 +35,17 @@ sudo apt install -y ocl-icd-opencl-dev opencl-headers clinfo
 
 > **Tip:** Vendor-specific GPU drivers (e.g., NVIDIA, AMD, Intel) may provide additional optimized OpenCL implementations. Install the appropriate driver package from your vendor to access hardware acceleration.
 
-### 4. Verify OpenCL availability (optional)
-After installation, confirm that OpenCL platforms are visible:
+### 4. Verify OpenCL availability
+Confirm that OpenCL platforms are visible:
 
 ```bash
 clinfo | head
 ```
 
-If `clinfo` lists at least one platform, you are ready to build with the `opencl` build tag:
+If `clinfo` lists at least one platform, you are ready to build:
 
 ```bash
-go build -tags opencl ./...
+go build ./...
 ```
 
 ### Troubleshooting OpenCL startup errors
@@ -62,19 +62,11 @@ Once dependencies are installed, install Go (if not already available) and build
 go build ./...
 ```
 
-To enable the OpenCL solver, include the build tag:
+Run the application:
 
 ```bash
-go build -tags opencl ./...
+go run .
 ```
-
-Run the application with OpenCL enabled:
-
-```bash
-go run -tags opencl .
-```
-
-Use the `-use-opencl` runtime flag to toggle the solver on or off after compiling with the tag.
 
 ### Runtime options
 

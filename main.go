@@ -1,13 +1,12 @@
 package main
 
 import (
-	"flag"
-	"log"
-	"os"
-	"runtime"
-	"time"
+    "flag"
+    "log"
+    "os"
+    "time"
 
-	"github.com/hajimehoshi/ebiten/v2"
+    "github.com/hajimehoshi/ebiten/v2"
 )
 
 // main configures the runtime, optionally records a profile, and launches Ebiten.
@@ -19,16 +18,7 @@ func main() {
 	} else if boundaryReflect > 1 {
 		boundaryReflect = 1
 	}
-	workerCount := *threadCountFlag
-	if workerCount <= 0 {
-		workerCount = runtime.NumCPU()
-	}
-	if workerCount < 1 {
-		workerCount = 1
-	}
-	runtime.GOMAXPROCS(workerCount)
-
-	var stopProfile func()
+    var stopProfile func()
 	if *recordDefaultPGO {
 		var err error
 		stopProfile, err = startDefaultPGORecording("default.pgo")
@@ -38,7 +28,7 @@ func main() {
 		defer stopProfile()
 	}
 
-	g := newGame(workerCount, *useOpenCLFlag)
+    g := newGame()
 	if *recordDefaultPGO {
 		g.enableAutoWalk(pgoRecordDuration)
 		go func(stop func()) {
