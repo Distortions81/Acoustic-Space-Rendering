@@ -89,21 +89,19 @@ func (g *Game) Update() error {
 		g.stepTimer++
 		if g.stepTimer >= stepDelay {
 			g.stepTimer = 0
-			for y := -emitterRad; y <= emitterRad; y++ {
-				for x := -emitterRad; x <= emitterRad; x++ {
-					if x*x+y*y <= emitterRad*emitterRad {
-						cx := int(g.ex) + x
-						cy := int(g.ey) + y
-						if cx <= 0 || cx >= w-1 || cy <= 0 || cy >= h-1 {
-							continue
-						}
-						if g.isWall(cx, cy) {
-							continue
-						}
-						if g.field.queueImpulse(cx, cy, stepImpulseStrength) {
-							impulsesFired = true
-						}
-					}
+			baseX := int(g.ex)
+			baseY := int(g.ey)
+			for _, offset := range emitterFootprint {
+				cx := baseX + offset.dx
+				cy := baseY + offset.dy
+				if cx <= 0 || cx >= w-1 || cy <= 0 || cy >= h-1 {
+					continue
+				}
+				if g.isWall(cx, cy) {
+					continue
+				}
+				if g.field.queueImpulse(cx, cy, stepImpulseStrength) {
+					impulsesFired = true
 				}
 			}
 		}
