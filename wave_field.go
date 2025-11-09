@@ -7,7 +7,13 @@ type waveField struct {
 	curr          []float32
 	prev          []float32
 	next          []float32
-	currDirty     bool
+	impulses      []waveImpulse
+}
+
+type waveImpulse struct {
+	index     int32
+	value     float32
+	applyPrev bool
 }
 
 // audio removal: sample index and PCM helpers removed
@@ -16,37 +22,37 @@ type waveField struct {
 func newWaveField(width, height int) *waveField {
 	return &waveField{
 		width: width, height: height,
-		curr:      make([]float32, width*height),
-		prev:      make([]float32, width*height),
-		next:      make([]float32, width*height),
-		currDirty: true,
+		curr: make([]float32, width*height),
+		prev: make([]float32, width*height),
+		next: make([]float32, width*height),
 	}
 }
 
-func (f *waveField) markCurrDirty() {
-	f.currDirty = true
-}
-
-// setCurr writes a value into the current state buffer and reports whether the
-// write changed the cell.
-func (f *waveField) setCurr(x, y int, value float32) bool {
-	idx := y*f.width + x
-	if f.curr[idx] == value {
-		return false
-	}
-	f.curr[idx] = value
-	f.markCurrDirty()
+// queueImpulse records an impulse to be applied to the device buffers. It
+// updates the host-side current buffer for debug visibility and always reports
+// that an impulse was enqueued.
+func (f *waveField) queueImpulse(x, y int, value float32) bool {
+	f.queueImpulseInternal(x, y, value, false)
 	return true
+}
+
+func (f *waveField) queueImpulseInternal(x, y int, value float32, applyPrev bool) {
+	idx := y*f.width + x
+	f.curr[idx] = value
+	if applyPrev {
+		f.prev[idx] = value
+	}
+	f.impulses = append(f.impulses, waveImpulse{
+		index:     int32(idx),
+		value:     value,
+		applyPrev: applyPrev,
+	})
 }
 
 // zeroCell clears the current, previous, and next buffers at the given cell.
 func (f *waveField) zeroCell(x, y int) {
 	idx := y*f.width + x
-	if f.curr[idx] != 0 {
-		f.markCurrDirty()
-	}
-	f.curr[idx] = 0
-	f.prev[idx] = 0
+	f.queueImpulseInternal(x, y, 0, true)
 	f.next[idx] = 0
 }
 
@@ -60,15 +66,13 @@ func (f *waveField) swap() {
 	f.prev, f.curr, f.next = f.curr, f.next, f.prev
 }
 
-// currWasModified reports whether host-side writes have altered the current
-// buffer since the last GPU upload.
-func (f *waveField) currWasModified() bool {
-	return f.currDirty
-}
-
-// clearCurrDirty marks the current buffer as synchronized with the device.
-func (f *waveField) clearCurrDirty() {
-	f.currDirty = false
+func (f *waveField) takeImpulses() []waveImpulse {
+	if len(f.impulses) == 0 {
+		return nil
+	}
+	batch := f.impulses
+	f.impulses = f.impulses[:0]
+	return batch
 }
 
 // zeroBoundaries applies absorbing boundary conditions on the edges of the grid
