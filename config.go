@@ -6,8 +6,8 @@ import "time"
 // application. These values define the grid size, timing, and audio behavior for
 // the acoustic wave simulation.
 const (
-	w, h                   = 1024, 1024
-	windowScale            = 1
+	w, h                   = 512, 512
+	windowScale            = 2
 	damp                   = 0.9994
 	speed                  = 0.5
 	waveDamp32             = float32(damp)
@@ -16,14 +16,14 @@ const (
 	moveSpeed              = 2
 	stepDelay              = 60 / 4
 	defaultTPS             = 60.0
-	defaultSimMultiplier   = 300
+	defaultSimMultiplier   = 10
 	simMultiplierStep      = 10
 	minSimMultiplier       = 1
 	maxSimMultiplier       = 1000
 	earOffsetCells         = 5
 	defaultBoundaryReflect = 0.4
 	stepImpulseStrength    = 10.0
-	wallSegments           = 40
+	wallSegments           = 20
 	wallMinLen             = 12
 	wallMaxLen             = 300
 	wallExclusionRadius    = 1
