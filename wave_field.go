@@ -7,6 +7,7 @@ type waveField struct {
 	curr          []float32
 	prev          []float32
 	next          []float32
+	currDirty     bool
 }
 
 // audio removal: sample index and PCM helpers removed
@@ -15,20 +16,35 @@ type waveField struct {
 func newWaveField(width, height int) *waveField {
 	return &waveField{
 		width: width, height: height,
-		curr: make([]float32, width*height),
-		prev: make([]float32, width*height),
-		next: make([]float32, width*height),
+		curr:      make([]float32, width*height),
+		prev:      make([]float32, width*height),
+		next:      make([]float32, width*height),
+		currDirty: true,
 	}
 }
 
-// setCurr writes a value into the current state buffer.
-func (f *waveField) setCurr(x, y int, value float32) {
-	f.curr[y*f.width+x] = value
+func (f *waveField) markCurrDirty() {
+	f.currDirty = true
+}
+
+// setCurr writes a value into the current state buffer and reports whether the
+// write changed the cell.
+func (f *waveField) setCurr(x, y int, value float32) bool {
+	idx := y*f.width + x
+	if f.curr[idx] == value {
+		return false
+	}
+	f.curr[idx] = value
+	f.markCurrDirty()
+	return true
 }
 
 // zeroCell clears the current, previous, and next buffers at the given cell.
 func (f *waveField) zeroCell(x, y int) {
 	idx := y*f.width + x
+	if f.curr[idx] != 0 {
+		f.markCurrDirty()
+	}
 	f.curr[idx] = 0
 	f.prev[idx] = 0
 	f.next[idx] = 0
@@ -42,6 +58,17 @@ func (f *waveField) readCurr(x, y int) float32 {
 // swap rotates the triple buffers so that next becomes current and current becomes previous.
 func (f *waveField) swap() {
 	f.prev, f.curr, f.next = f.curr, f.next, f.prev
+}
+
+// currWasModified reports whether host-side writes have altered the current
+// buffer since the last GPU upload.
+func (f *waveField) currWasModified() bool {
+	return f.currDirty
+}
+
+// clearCurrDirty marks the current buffer as synchronized with the device.
+func (f *waveField) clearCurrDirty() {
+	f.currDirty = false
 }
 
 // zeroBoundaries applies absorbing boundary conditions on the edges of the grid
