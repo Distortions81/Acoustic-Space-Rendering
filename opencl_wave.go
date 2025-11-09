@@ -11,32 +11,28 @@ import (
 )
 
 type openCLWaveSolver struct {
-	context           *cl.Context
-	queue             *cl.CommandQueue
-	program           *cl.Program
-	kernel            *cl.Kernel
-	renderKernel      *cl.Kernel
-	zeroWallsKernel   *cl.Kernel
-	boundaryRowKernel *cl.Kernel
-	boundaryColKernel *cl.Kernel
-	currBuf           *cl.MemObject
-	prevBuf           *cl.MemObject
-	nextBuf           *cl.MemObject
-	pixelBuf          *cl.MemObject
-	wallIndexBuf      *cl.MemObject
-	width             int
-	height            int
-	wallIndices       []int32
-	wallCount         int
-	wallsSynced       bool
-	deviceName        string
-	coldStart         bool
-	boundCurr         *cl.MemObject
-	boundPrev         *cl.MemObject
-	boundNext         *cl.MemObject
-	hostPixels        []byte
-	debugVerify       bool
-	debugScratch      []float32
+	context      *cl.Context
+	queue        *cl.CommandQueue
+	program      *cl.Program
+	kernel       *cl.Kernel
+	renderKernel *cl.Kernel
+	currBuf      *cl.MemObject
+	prevBuf      *cl.MemObject
+	nextBuf      *cl.MemObject
+	pixelBuf     *cl.MemObject
+	wallMaskBuf  *cl.MemObject
+	width        int
+	height       int
+	wallMask     []uint8
+	wallsSynced  bool
+	deviceName   string
+	coldStart    bool
+	boundCurr    *cl.MemObject
+	boundPrev    *cl.MemObject
+	boundNext    *cl.MemObject
+	hostPixels   []byte
+	debugVerify  bool
+	debugScratch []float32
 }
 
 const verifyTolerance = 1e-4
@@ -46,8 +42,10 @@ const waveKernelSource = `__kernel void wave_step(
     const int height,
     const float damp,
     const float speed,
+    const float reflect,
     __global const float* curr,
     __global const float* prev,
+    __global const uchar* walls,
     __global float* next_buffer)
 {
     int idx = get_global_id(0);
@@ -55,68 +53,64 @@ const waveKernelSource = `__kernel void wave_step(
     if (idx >= size) {
         return;
     }
+    if (walls[idx]) {
+        next_buffer[idx] = 0.0f;
+        return;
+    }
     int x = idx % width;
     int y = idx / width;
-    if (x <= 0 || x >= width - 1 || y <= 0 || y >= height - 1) {
-        return;
-    }
-    int left = idx - 1;
-    int right = idx + 1;
-    int top = idx - width;
-    int bottom = idx + width;
     float center = curr[idx];
-    float laplacian = curr[left] + curr[right] + curr[top] + curr[bottom] - 4.0f * center;
-    next_buffer[idx] = ((2.0f * center - prev[idx]) + speed * laplacian) * damp;
-}
-
-__kernel void clear_walls(
-    __global float* buffer,
-    __global const int* wall_indices,
-    const int wall_count)
-{
-    int gid = get_global_id(0);
-    if (gid >= wall_count) {
-        return;
-    }
-    int idx = wall_indices[gid];
-    buffer[idx] = 0.0f;
-}
-
-__kernel void apply_boundary_rows(
-    const int width,
-    const int height,
-    const float reflect,
-    __global float* buffer)
-{
-    int x = get_global_id(0);
-    if (x >= width) {
-        return;
-    }
+    int last_col = width - 1;
     int last_row = height - 1;
-    int top_idx = x;
-    int bottom_idx = last_row * width + x;
-    int top_src = width + x;
-    int bottom_src = (last_row - 1) * width + x;
-    buffer[top_idx] = -buffer[top_src] * reflect;
-    buffer[bottom_idx] = -buffer[bottom_src] * reflect;
-}
-
-__kernel void apply_boundary_cols(
-    const int width,
-    const int height,
-    const float reflect,
-    __global float* buffer)
-{
-    int y = get_global_id(0) + 1;
-    int last_row = height - 1;
-    if (y >= last_row) {
-        return;
+    float left;
+    if (x > 0) {
+        left = curr[idx - 1];
+    } else if (width > 1) {
+        left = -curr[idx + 1] * reflect;
+    } else {
+        left = -center * reflect;
     }
-    int base = y * width;
-    int left_idx = base;
-    int right_idx = base + width - 1;
-    buffer[left_idx] = -buffer[left_idx + 1] * reflect;
-    buffer[right_idx] = -buffer[right_idx - 1] * reflect;
+    float right;
+    if (x < last_col) {
+        right = curr[idx + 1];
+    } else if (width > 1) {
+        right = -curr[idx - 1] * reflect;
+    } else {
+        right = -center * reflect;
+    }
+    float top;
+    if (y > 0) {
+        top = curr[idx - width];
+    } else if (height > 1) {
+        top = -curr[idx + width] * reflect;
+    } else {
+        top = -center * reflect;
+    }
+    float bottom;
+    if (y < last_row) {
+        bottom = curr[idx + width];
+    } else if (height > 1) {
+        bottom = -curr[idx - width] * reflect;
+    } else {
+        bottom = -center * reflect;
+    }
+    float laplacian = left + right + top + bottom - 4.0f * center;
+    float value = ((2.0f * center - prev[idx]) + speed * laplacian) * damp;
+    if (x == 0) {
+        int mirror = (width > 1) ? idx + 1 : idx;
+        value = -curr[mirror] * reflect;
+    } else if (x == last_col) {
+        int mirror = (width > 1) ? idx - 1 : idx;
+        value = -curr[mirror] * reflect;
+    }
+    if (y == 0) {
+        int mirror = (height > 1) ? idx + width : idx;
+        value = -curr[mirror] * reflect;
+    } else if (y == last_row) {
+        int mirror = (height > 1) ? idx - width : idx;
+        value = -curr[mirror] * reflect;
+    }
+    next_buffer[idx] = value;
 }
 
 __kernel void render_intensity(
@@ -214,43 +208,12 @@ func newOpenCLWaveSolver(width, height int) (*openCLWaveSolver, error) {
 		context.Release()
 		return nil, fmt.Errorf("creating render kernel: %w", err)
 	}
-	zeroWallsKernel, err := program.CreateKernel("clear_walls")
-	if err != nil {
-		kernel.Release()
-		renderKernel.Release()
-		program.Release()
-		queue.Release()
-		context.Release()
-		return nil, fmt.Errorf("creating wall kernel: %w", err)
-	}
-	boundaryRowKernel, err := program.CreateKernel("apply_boundary_rows")
-	if err != nil {
-		zeroWallsKernel.Release()
-		kernel.Release()
-		program.Release()
-		queue.Release()
-		context.Release()
-		return nil, fmt.Errorf("creating boundary row kernel: %w", err)
-	}
-	boundaryColKernel, err := program.CreateKernel("apply_boundary_cols")
-	if err != nil {
-		boundaryRowKernel.Release()
-		zeroWallsKernel.Release()
-		kernel.Release()
-		renderKernel.Release()
-		program.Release()
-		queue.Release()
-		context.Release()
-		return nil, fmt.Errorf("creating boundary column kernel: %w", err)
-	}
 	size := width * height
 	byteSize := size * int(unsafe.Sizeof(float32(0)))
 	currBuf, err := context.CreateEmptyBuffer(cl.MemReadOnly, byteSize)
 	if err != nil {
 		kernel.Release()
-		boundaryColKernel.Release()
-		boundaryRowKernel.Release()
-		zeroWallsKernel.Release()
+		renderKernel.Release()
 		program.Release()
 		queue.Release()
 		context.Release()
@@ -260,9 +223,7 @@ func newOpenCLWaveSolver(width, height int) (*openCLWaveSolver, error) {
 	if err != nil {
 		currBuf.Release()
 		kernel.Release()
-		boundaryColKernel.Release()
-		boundaryRowKernel.Release()
-		zeroWallsKernel.Release()
+		renderKernel.Release()
 		program.Release()
 		queue.Release()
 		context.Release()
@@ -274,9 +235,6 @@ func newOpenCLWaveSolver(width, height int) (*openCLWaveSolver, error) {
 		currBuf.Release()
 		kernel.Release()
 		renderKernel.Release()
-		boundaryColKernel.Release()
-		boundaryRowKernel.Release()
-		zeroWallsKernel.Release()
 		program.Release()
 		queue.Release()
 		context.Release()
@@ -289,15 +247,12 @@ func newOpenCLWaveSolver(width, height int) (*openCLWaveSolver, error) {
 		currBuf.Release()
 		kernel.Release()
 		renderKernel.Release()
-		boundaryColKernel.Release()
-		boundaryRowKernel.Release()
-		zeroWallsKernel.Release()
 		program.Release()
 		queue.Release()
 		context.Release()
 		return nil, fmt.Errorf("allocating pixel buffer: %w", err)
 	}
-	wallIndexBuf, err := context.CreateEmptyBuffer(cl.MemReadOnly, size*int(unsafe.Sizeof(int32(0))))
+	wallMaskBuf, err := context.CreateEmptyBuffer(cl.MemReadOnly, size)
 	if err != nil {
 		nextBuf.Release()
 		prevBuf.Release()
@@ -305,35 +260,29 @@ func newOpenCLWaveSolver(width, height int) (*openCLWaveSolver, error) {
 		pixelBuf.Release()
 		kernel.Release()
 		renderKernel.Release()
-		boundaryColKernel.Release()
-		boundaryRowKernel.Release()
-		zeroWallsKernel.Release()
 		program.Release()
 		queue.Release()
 		context.Release()
-		return nil, fmt.Errorf("allocating wall index buffer: %w", err)
+		return nil, fmt.Errorf("allocating wall mask buffer: %w", err)
 	}
 
 	solver := &openCLWaveSolver{
-		context:           context,
-		queue:             queue,
-		program:           program,
-		kernel:            kernel,
-		renderKernel:      renderKernel,
-		zeroWallsKernel:   zeroWallsKernel,
-		boundaryRowKernel: boundaryRowKernel,
-		boundaryColKernel: boundaryColKernel,
-		currBuf:           currBuf,
-		prevBuf:           prevBuf,
-		nextBuf:           nextBuf,
-		pixelBuf:          pixelBuf,
-		wallIndexBuf:      wallIndexBuf,
-		width:             width,
-		height:            height,
-		deviceName:        device.Name(),
-		coldStart:         true,
-		hostPixels:        make([]byte, size*4),
-		debugVerify:       verifyOpenCLSyncFlag != nil && *verifyOpenCLSyncFlag,
+		context:      context,
+		queue:        queue,
+		program:      program,
+		kernel:       kernel,
+		renderKernel: renderKernel,
+		currBuf:      currBuf,
+		prevBuf:      prevBuf,
+		nextBuf:      nextBuf,
+		pixelBuf:     pixelBuf,
+		wallMaskBuf:  wallMaskBuf,
+		width:        width,
+		height:       height,
+		deviceName:   device.Name(),
+		coldStart:    true,
+		hostPixels:   make([]byte, size*4),
+		debugVerify:  verifyOpenCLSyncFlag != nil && *verifyOpenCLSyncFlag,
 	}
 
 	if err := solver.kernel.SetArgs(
@@ -341,8 +290,10 @@ func newOpenCLWaveSolver(width, height int) (*openCLWaveSolver, error) {
 		int32(height),
 		waveDamp32,
 		waveSpeed32,
+		float32(boundaryReflect),
 		solver.currBuf,
 		solver.prevBuf,
+		solver.wallMaskBuf,
 		solver.nextBuf,
 	); err != nil {
 		solver.Close()
@@ -357,54 +308,32 @@ func newOpenCLWaveSolver(width, height int) (*openCLWaveSolver, error) {
 		solver.Close()
 		return nil, fmt.Errorf("setting render kernel arguments: %w", err)
 	}
-	if err := solver.zeroWallsKernel.SetArgs(
-		solver.nextBuf,
-		solver.wallIndexBuf,
-		int32(0),
-	); err != nil {
-		solver.Close()
-		return nil, fmt.Errorf("setting wall kernel arguments: %w", err)
-	}
-	reflect32 := float32(boundaryReflect)
-	if err := solver.boundaryRowKernel.SetArgs(
-		int32(width),
-		int32(height),
-		reflect32,
-		solver.nextBuf,
-	); err != nil {
-		solver.Close()
-		return nil, fmt.Errorf("setting boundary row kernel arguments: %w", err)
-	}
-	if err := solver.boundaryColKernel.SetArgs(
-		int32(width),
-		int32(height),
-		reflect32,
-		solver.nextBuf,
-	); err != nil {
-		solver.Close()
-		return nil, fmt.Errorf("setting boundary column kernel arguments: %w", err)
-	}
 
 	return solver, nil
 }
 
-func (s *openCLWaveSolver) ensureWallIndices(walls []bool) []int32 {
+func (s *openCLWaveSolver) ensureWallMask(walls []bool) []uint8 {
 	size := s.width * s.height
-	if len(walls) != size {
-		s.wallIndices = s.wallIndices[:0]
-		return s.wallIndices
+	if cap(s.wallMask) < size {
+		s.wallMask = make([]uint8, size)
 	}
-	if cap(s.wallIndices) < size {
-		s.wallIndices = make([]int32, 0, size)
-	} else {
-		s.wallIndices = s.wallIndices[:0]
+	mask := s.wallMask[:size]
+	if len(walls) != size {
+		for i := range mask {
+			mask[i] = 0
+		}
+		s.wallMask = mask
+		return mask
 	}
 	for i, w := range walls {
 		if w {
-			s.wallIndices = append(s.wallIndices, int32(i))
+			mask[i] = 1
+		} else {
+			mask[i] = 0
 		}
 	}
-	return s.wallIndices
+	s.wallMask = mask
+	return mask
 }
 
 // audio sampling helpers removed
@@ -435,7 +364,7 @@ func (s *openCLWaveSolver) verifyBufferMatchesSlice(buf *cl.MemObject, host []fl
 
 func (s *openCLWaveSolver) bindDynamicBuffers() error {
 	if s.boundCurr != s.currBuf {
-		if err := s.kernel.SetArgBuffer(4, s.currBuf); err != nil {
+		if err := s.kernel.SetArgBuffer(5, s.currBuf); err != nil {
 			return err
 		}
 		if err := s.renderKernel.SetArgBuffer(2, s.currBuf); err != nil {
@@ -444,22 +373,13 @@ func (s *openCLWaveSolver) bindDynamicBuffers() error {
 		s.boundCurr = s.currBuf
 	}
 	if s.boundPrev != s.prevBuf {
-		if err := s.kernel.SetArgBuffer(5, s.prevBuf); err != nil {
+		if err := s.kernel.SetArgBuffer(6, s.prevBuf); err != nil {
 			return err
 		}
 		s.boundPrev = s.prevBuf
 	}
 	if s.boundNext != s.nextBuf {
-		if err := s.kernel.SetArgBuffer(6, s.nextBuf); err != nil {
-			return err
-		}
-		if err := s.zeroWallsKernel.SetArgBuffer(0, s.nextBuf); err != nil {
-			return err
-		}
-		if err := s.boundaryRowKernel.SetArgBuffer(3, s.nextBuf); err != nil {
-			return err
-		}
-		if err := s.boundaryColKernel.SetArgBuffer(3, s.nextBuf); err != nil {
+		if err := s.kernel.SetArgBuffer(8, s.nextBuf); err != nil {
 			return err
 		}
 		s.boundNext = s.nextBuf
@@ -494,25 +414,14 @@ func (s *openCLWaveSolver) Step(field *waveField, walls []bool, steps int, walls
 		}
 	}
 	if !s.wallsSynced || wallsDirty {
-		indices := s.ensureWallIndices(walls)
-		s.wallCount = len(indices)
-		if s.wallCount > 0 {
-			ptr := unsafe.Pointer(&indices[0])
-			byteLen := len(indices) * int(unsafe.Sizeof(int32(0)))
-			if _, err := s.queue.EnqueueWriteBuffer(s.wallIndexBuf, false, 0, byteLen, ptr, nil); err != nil {
-				return fmt.Errorf("writing wall index buffer: %w", err)
+		mask := s.ensureWallMask(walls)
+		if len(mask) > 0 {
+			ptr := unsafe.Pointer(&mask[0])
+			if _, err := s.queue.EnqueueWriteBuffer(s.wallMaskBuf, false, 0, len(mask), ptr, nil); err != nil {
+				return fmt.Errorf("writing wall mask buffer: %w", err)
 			}
-		} else {
-			s.wallCount = 0
-		}
-		if err := s.zeroWallsKernel.SetArgInt32(2, int32(s.wallCount)); err != nil {
-			return fmt.Errorf("setting wall count: %w", err)
 		}
 		s.wallsSynced = true
-	} else {
-		if err := s.zeroWallsKernel.SetArgInt32(2, int32(s.wallCount)); err != nil {
-			return fmt.Errorf("refreshing wall count: %w", err)
-		}
 	}
 	global := []int{size}
 	didSwap := false
@@ -522,21 +431,6 @@ func (s *openCLWaveSolver) Step(field *waveField, walls []bool, steps int, walls
 		}
 		if _, err := s.queue.EnqueueNDRangeKernel(s.kernel, nil, global, nil, nil); err != nil {
 			return fmt.Errorf("enqueueing kernel: %w", err)
-		}
-		if s.wallCount > 0 {
-			if _, err := s.queue.EnqueueNDRangeKernel(s.zeroWallsKernel, nil, []int{s.wallCount}, nil, nil); err != nil {
-				return fmt.Errorf("clearing walls: %w", err)
-			}
-		}
-		if s.height > 1 {
-			if _, err := s.queue.EnqueueNDRangeKernel(s.boundaryRowKernel, nil, []int{s.width}, nil, nil); err != nil {
-				return fmt.Errorf("applying boundary rows: %w", err)
-			}
-		}
-		if s.height > 2 {
-			if _, err := s.queue.EnqueueNDRangeKernel(s.boundaryColKernel, nil, []int{s.height - 2}, nil, nil); err != nil {
-				return fmt.Errorf("applying boundary columns: %w", err)
-			}
 		}
 		s.prevBuf, s.currBuf, s.nextBuf = s.currBuf, s.nextBuf, s.prevBuf
 		didSwap = true
@@ -577,9 +471,9 @@ func (s *openCLWaveSolver) Close() {
 		s.pixelBuf.Release()
 		s.pixelBuf = nil
 	}
-	if s.wallIndexBuf != nil {
-		s.wallIndexBuf.Release()
-		s.wallIndexBuf = nil
+	if s.wallMaskBuf != nil {
+		s.wallMaskBuf.Release()
+		s.wallMaskBuf = nil
 	}
 	if s.nextBuf != nil {
 		s.nextBuf.Release()
@@ -600,18 +494,6 @@ func (s *openCLWaveSolver) Close() {
 	if s.renderKernel != nil {
 		s.renderKernel.Release()
 		s.renderKernel = nil
-	}
-	if s.zeroWallsKernel != nil {
-		s.zeroWallsKernel.Release()
-		s.zeroWallsKernel = nil
-	}
-	if s.boundaryRowKernel != nil {
-		s.boundaryRowKernel.Release()
-		s.boundaryRowKernel = nil
-	}
-	if s.boundaryColKernel != nil {
-		s.boundaryColKernel.Release()
-		s.boundaryColKernel = nil
 	}
 	if s.program != nil {
 		s.program.Release()
