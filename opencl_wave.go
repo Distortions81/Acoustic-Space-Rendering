@@ -49,6 +49,10 @@ type openCLWaveSolver struct {
 	lastRenderUseVisibility int32
 	debugVerify             bool
 	debugScratch            []float32
+	impulseCurrIndices      []int32
+	impulseCurrValues       []float32
+	impulsePrevIndices      []int32
+	impulsePrevValues       []float32
 }
 
 const verifyTolerance = 1e-4
@@ -624,22 +628,34 @@ func (s *openCLWaveSolver) applyQueuedImpulses(field *waveField) error {
 	if len(impulses) == 0 {
 		return nil
 	}
-	currIndices := make([]int32, 0, len(impulses))
-	currValues := make([]float32, 0, len(impulses))
-	prevIndices := make([]int32, 0, len(impulses))
-	prevValues := make([]float32, 0, len(impulses))
+	s.impulseCurrIndices = s.impulseCurrIndices[:0]
+	s.impulseCurrValues = s.impulseCurrValues[:0]
+	s.impulsePrevIndices = s.impulsePrevIndices[:0]
+	s.impulsePrevValues = s.impulsePrevValues[:0]
+	if cap(s.impulseCurrIndices) < len(impulses) {
+		s.impulseCurrIndices = make([]int32, 0, len(impulses))
+	}
+	if cap(s.impulseCurrValues) < len(impulses) {
+		s.impulseCurrValues = make([]float32, 0, len(impulses))
+	}
+	if cap(s.impulsePrevIndices) < len(impulses) {
+		s.impulsePrevIndices = make([]int32, 0, len(impulses))
+	}
+	if cap(s.impulsePrevValues) < len(impulses) {
+		s.impulsePrevValues = make([]float32, 0, len(impulses))
+	}
 	for _, imp := range impulses {
-		currIndices = append(currIndices, imp.index)
-		currValues = append(currValues, imp.value)
+		s.impulseCurrIndices = append(s.impulseCurrIndices, imp.index)
+		s.impulseCurrValues = append(s.impulseCurrValues, imp.value)
 		if imp.applyPrev {
-			prevIndices = append(prevIndices, imp.index)
-			prevValues = append(prevValues, imp.value)
+			s.impulsePrevIndices = append(s.impulsePrevIndices, imp.index)
+			s.impulsePrevValues = append(s.impulsePrevValues, imp.value)
 		}
 	}
-	if err := s.dispatchImpulses(s.currBuf, currIndices, currValues); err != nil {
+	if err := s.dispatchImpulses(s.currBuf, s.impulseCurrIndices, s.impulseCurrValues); err != nil {
 		return err
 	}
-	if err := s.dispatchImpulses(s.prevBuf, prevIndices, prevValues); err != nil {
+	if err := s.dispatchImpulses(s.prevBuf, s.impulsePrevIndices, s.impulsePrevValues); err != nil {
 		return err
 	}
 	return nil

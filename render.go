@@ -18,13 +18,13 @@ func (g *Game) Draw(screen *ebiten.Image) {
 		}
 	}
 
-	for y := -emitterRad; y <= emitterRad; y++ {
-		for x := -emitterRad; x <= emitterRad; x++ {
-			cx := int(g.ex) + x
-			cy := int(g.ey) + y
-			if cx >= 0 && cx < w && cy >= 0 && cy < h {
-				screen.Set(cx, cy, color.RGBA{255, 0, 0, 255})
-			}
+	baseX := int(g.ex)
+	baseY := int(g.ey)
+	for _, offset := range emitterFootprint {
+		cx := baseX + offset.dx
+		cy := baseY + offset.dy
+		if cx >= 0 && cx < w && cy >= 0 && cy < h {
+			screen.Set(cx, cy, color.RGBA{255, 0, 0, 255})
 		}
 	}
 	g.drawEarIndicators(screen, int(g.ex), int(g.ey))
