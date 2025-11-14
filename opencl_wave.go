@@ -35,7 +35,10 @@ type openCLWaveSolver struct {
 	elementBytes            int
 	wallMaskSynced          bool
 	deviceName              string
+	device                  *cl.Device
 	coldStart               bool
+	waveGlobal              []int
+	waveLocal               []int
 	boundCurr               *cl.MemObject
 	boundPrev               *cl.MemObject
 	boundNext               *cl.MemObject
@@ -493,37 +496,41 @@ func newOpenCLWaveSolver(width, height int) (*openCLWaveSolver, error) {
 		return nil, fmt.Errorf("allocating impulse value buffer: %w", err)
 	}
 
-		solver := &openCLWaveSolver{
-			context:                 context,
-			queue:                   queue,
-			program:                 program,
-			kernel:                  kernel,
-			renderKernel:            renderKernel,
-			accumKernel:             accumKernel,
-			applyImpulsesKernel:     applyImpulsesKernel,
-			boundaryKernel:          boundaryKernel,
-			currBuf:                 currBuf,
-			prevBuf:                 prevBuf,
-			nextBuf:                 nextBuf,
-			pixelBuf:                pixelBuf,
-			accumBuf:                accumBuf,
-			wallMaskBuf:             wallMaskBuf,
-			visibilityBuf:           visibilityBuf,
-			impulseIndexBuf:         impulseIndexBuf,
-			impulseValueBuf:         impulseValueBuf,
-			width:                   width,
-			height:                  height,
-			useFP16:                 useFP16,
-			elementBytes:            elementBytes,
-			deviceName:              device.Name(),
-			coldStart:               true,
-			hostPixels:              make([]byte, size*4),
-			hostWallMask:            make([]byte, size),
-			hostVisibility:          make([]byte, size),
-			lastRenderShowWalls:     -1,
-			lastRenderUseVisibility: -1,
-			debugVerify:             verifyOpenCLSyncFlag != nil && *verifyOpenCLSyncFlag,
-		}
+	waveGlobal, waveLocal := computeWaveKernelWorkSizes(width, height, kernel, device)
+	solver := &openCLWaveSolver{
+		context:                 context,
+		queue:                   queue,
+		program:                 program,
+		kernel:                  kernel,
+		renderKernel:            renderKernel,
+		accumKernel:             accumKernel,
+		applyImpulsesKernel:     applyImpulsesKernel,
+		boundaryKernel:          boundaryKernel,
+		currBuf:                 currBuf,
+		prevBuf:                 prevBuf,
+		nextBuf:                 nextBuf,
+		pixelBuf:                pixelBuf,
+		accumBuf:                accumBuf,
+		wallMaskBuf:             wallMaskBuf,
+		visibilityBuf:           visibilityBuf,
+		impulseIndexBuf:         impulseIndexBuf,
+		impulseValueBuf:         impulseValueBuf,
+		width:                   width,
+		height:                  height,
+		useFP16:                 useFP16,
+		elementBytes:            elementBytes,
+		deviceName:              device.Name(),
+		device:                  device,
+		waveGlobal:              waveGlobal,
+		waveLocal:               waveLocal,
+		coldStart:               true,
+		hostPixels:              make([]byte, size*4),
+		hostWallMask:            make([]byte, size),
+		hostVisibility:          make([]byte, size),
+		lastRenderShowWalls:     -1,
+		lastRenderUseVisibility: -1,
+		debugVerify:             verifyOpenCLSyncFlag != nil && *verifyOpenCLSyncFlag,
+	}
 
 	precision := "fp32"
 	if useFP16 {
@@ -616,6 +623,57 @@ func ensureUint16Slice(buf []uint16, size int) []uint16 {
 		return make([]uint16, size)
 	}
 	return buf[:size]
+}
+
+func computeWaveKernelWorkSizes(width, height int, kernel *cl.Kernel, device *cl.Device) ([]int, []int) {
+	if width <= 0 || height <= 0 || kernel == nil || device == nil {
+		return []int{width, height}, nil
+	}
+	maxWorkGroupSize, err := kernel.WorkGroupSize(device)
+	if err != nil || maxWorkGroupSize <= 0 {
+		return []int{width, height}, nil
+	}
+	localX := width
+	if pref, err := kernel.PreferredWorkGroupSizeMultiple(device); err == nil && pref > 0 {
+		localX = pref
+	}
+	if localX < 1 {
+		localX = 1
+	}
+	if localX > width {
+		localX = width
+	}
+	if localX > maxWorkGroupSize {
+		localX = maxWorkGroupSize
+	}
+	if localX == 0 {
+		localX = 1
+	}
+	maxY := maxWorkGroupSize / localX
+	if maxY < 1 {
+		maxY = 1
+	}
+	localY := height
+	if localY > maxY {
+		localY = maxY
+	}
+	if localY < 1 {
+		localY = 1
+	}
+	globalX := roundUp(width, localX)
+	globalY := roundUp(height, localY)
+	return []int{globalX, globalY}, []int{localX, localY}
+}
+
+func roundUp(value, align int) int {
+	if align <= 0 {
+		return value
+	}
+	remainder := value % align
+	if remainder == 0 {
+		return value
+	}
+	return value + align - remainder
 }
 
 func (s *openCLWaveSolver) verifyBufferMatchesSlice(buf *cl.MemObject, host []float32, label string) error {
@@ -927,7 +985,14 @@ func (s *openCLWaveSolver) Step(field *waveField, walls []bool, steps int, walls
 		}
 	}
 	accumGlobal := []int{size}
-	waveGlobal := []int{s.width, s.height}
+	waveGlobal := s.waveGlobal
+	if len(waveGlobal) != 2 {
+		waveGlobal = []int{s.width, s.height}
+	}
+	waveLocal := s.waveLocal
+	if len(waveLocal) != 0 && len(waveLocal) != len(waveGlobal) {
+		waveLocal = nil
+	}
 	boundaryGlobal := s.boundaryWorkSize()
 	scale := float32(1)
 	if steps > 0 {
@@ -937,7 +1002,7 @@ func (s *openCLWaveSolver) Step(field *waveField, walls []bool, steps int, walls
 		if err := s.bindDynamicBuffers(); err != nil {
 			return fmt.Errorf("binding buffers: %w", err)
 		}
-		if _, err := s.queue.EnqueueNDRangeKernel(s.kernel, nil, waveGlobal, nil, nil); err != nil {
+		if _, err := s.queue.EnqueueNDRangeKernel(s.kernel, nil, waveGlobal, waveLocal, nil); err != nil {
 			return fmt.Errorf("enqueueing kernel: %w", err)
 		}
 		if boundaryGlobal != nil {
