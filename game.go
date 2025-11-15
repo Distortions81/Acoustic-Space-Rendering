@@ -5,6 +5,8 @@ import (
 	"math"
 	"math/rand"
 	"time"
+
+	"github.com/hajimehoshi/ebiten/v2/audio"
 )
 
 // Game encapsulates the full simulation state, rendering buffers, and audio pipeline.
@@ -39,6 +41,10 @@ type Game struct {
 	gpuSolver      *openCLWaveSolver
 	impulsesActive bool
 	wallsDirty     bool
+
+	audioCtx    *audio.Context
+	audioStream *centerAudioStream
+	audioPlayer *audio.Player
 }
 
 // newGame constructs a fully initialized Game instance.
@@ -54,12 +60,23 @@ func newGame() *Game {
 		autoWalkRand:      rand.New(rand.NewSource(time.Now().UnixNano() + 2)),
 		simStepMultiplier: defaultSimMultiplier,
 	}
-	// Audio removed
 	if solver, err := newOpenCLWaveSolver(w, h); err != nil {
 		log.Fatalf("OpenCL initialization failed: %v", err)
 	} else {
 		log.Printf("OpenCL solver enabled (device: %s)", solver.DeviceName())
 		g.gpuSolver = solver
+		if enableAudioFlag != nil && *enableAudioFlag {
+			ctx := audio.NewContext(audioSampleRate)
+			g.audioCtx = ctx
+			stream := newCenterAudioStream()
+			g.audioStream = stream
+			if player, err := ctx.NewPlayer(stream); err != nil {
+				log.Printf("Audio player creation failed: %v", err)
+			} else {
+				g.audioPlayer = player
+				g.audioPlayer.Play()
+			}
+		}
 	}
 	g.generateWalls()
 	g.lastVisCX, g.lastVisCY = -1, -1
@@ -125,6 +142,9 @@ func (g *Game) Update() error {
 	}
 	if err := g.gpuSolver.Step(g.field, g.walls, steps, g.wallsDirty, *showWallsFlag, *occludeLineOfSightFlag, visibleStamp, visibleGen); err != nil {
 		return err
+	}
+	if g.audioStream != nil && g.gpuSolver != nil {
+		g.audioStream.SetSample(g.gpuSolver.CenterSample())
 	}
 	g.wallsDirty = false
 	g.lastSimDuration = time.Since(simStart)

@@ -6,9 +6,9 @@ import "time"
 // application. These values define the grid size and timing for
 // the acoustic wave simulation.
 const (
-	w, h                   = 1920, 1080
+	w, h                   = 512, 512
 	windowScale            = 1
-	damp                   = 0.999
+	damp                   = 0.998
 	speed                  = 0.5
 	waveDamp32             = float32(damp)
 	waveSpeed32            = float32(speed)

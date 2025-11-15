@@ -29,4 +29,10 @@ var (
 	debugFlag = flag.Bool("debug", false, "show FPS and simulation speed overlay")
 
 	verifyOpenCLSyncFlag = flag.Bool("verify-opencl-sync", false, "compare OpenCL buffers before/after simulation steps when skipping host uploads")
+
+	// enableAudioFlag toggles optional audio output driven by center samples.
+	enableAudioFlag = flag.Bool("enable-audio", false, "enable experimental audio output from center samples")
+
+	// captureStepSamplesFlag enables per-step center sampling on the GPU.
+	captureStepSamplesFlag = flag.Bool("capture-step-samples", false, "capture per-step center samples on the GPU (higher GPU/CPU overhead)")
 )

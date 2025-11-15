@@ -17,6 +17,7 @@ type openCLWaveSolver struct {
 	program                 *cl.Program
 	kernel                  *cl.Kernel
 	renderKernel            *cl.Kernel
+	sampleKernel            *cl.Kernel
 	applyImpulsesKernel     *cl.Kernel
 	boundaryAccumKernel     *cl.Kernel
 	currBuf                 *cl.MemObject
@@ -24,6 +25,7 @@ type openCLWaveSolver struct {
 	nextBuf                 *cl.MemObject
 	pixelBuf                *cl.MemObject
 	accumBuf                *cl.MemObject
+	centerSampleBuf         *cl.MemObject
 	wallMaskBuf             *cl.MemObject
 	visibilityBuf           *cl.MemObject
 	impulseIndexBuf         *cl.MemObject
@@ -44,6 +46,8 @@ type openCLWaveSolver struct {
 	hostPixels              []byte
 	hostWallMask            []byte
 	hostVisibility          []byte
+	hostCenterSamples       []float32
+	hostCenterSamplesHalf   []uint16
 	pixelMu                 sync.Mutex
 	pixelEvent              *cl.Event
 	uploadedVisibleGen      uint32
@@ -62,6 +66,8 @@ type openCLWaveSolver struct {
 	hostNextHalf            []uint16
 	impulseCurrHalf         []uint16
 	impulsePrevHalf         []uint16
+	centerSample            float32
+	lastSampleCount         int
 }
 
 const verifyTolerance = 1e-4
@@ -213,6 +219,22 @@ __kernel void boundary_accumulate(
     float value = fabs(to_float(buffer[idx]));
     real_t scaled = to_real(value * scale);
     accum[idx] += scaled;
+}
+
+__kernel void sample_center(
+    const int step_index,
+    const int width,
+    const int height,
+    __global const real_t* curr,
+    __global real_t* samples)
+{
+    int cx = width / 2;
+    int cy = height / 2;
+    if (cx < 0 || cy < 0 || cx >= width || cy >= height) {
+        return;
+    }
+    int idx = cy * width + cx;
+    samples[step_index] = curr[idx];
 }
 `
 
@@ -466,6 +488,53 @@ func newOpenCLWaveSolver(width, height int) (*openCLWaveSolver, error) {
 		return nil, fmt.Errorf("allocating impulse value buffer: %w", err)
 	}
 
+	var centerSampleBuf *cl.MemObject
+	var sampleKernel *cl.Kernel
+	if captureStepSamplesFlag != nil && *captureStepSamplesFlag {
+		centerSampleBuf, err = context.CreateEmptyBuffer(cl.MemReadWrite, maxSimMultiplier*elementBytes)
+		if err != nil {
+			impulseValueBuf.Release()
+			impulseIndexBuf.Release()
+			visibilityBuf.Release()
+			wallMaskBuf.Release()
+			pixelBuf.Release()
+			accumBuf.Release()
+			nextBuf.Release()
+			prevBuf.Release()
+			currBuf.Release()
+			applyImpulsesKernel.Release()
+			boundaryAccumKernel.Release()
+			renderKernel.Release()
+			kernel.Release()
+			program.Release()
+			queue.Release()
+			context.Release()
+			return nil, fmt.Errorf("allocating center sample buffer: %w", err)
+		}
+
+		sampleKernel, err = program.CreateKernel("sample_center")
+		if err != nil {
+			centerSampleBuf.Release()
+			impulseValueBuf.Release()
+			impulseIndexBuf.Release()
+			visibilityBuf.Release()
+			wallMaskBuf.Release()
+			pixelBuf.Release()
+			accumBuf.Release()
+			nextBuf.Release()
+			prevBuf.Release()
+			currBuf.Release()
+			applyImpulsesKernel.Release()
+			boundaryAccumKernel.Release()
+			renderKernel.Release()
+			kernel.Release()
+			program.Release()
+			queue.Release()
+			context.Release()
+			return nil, fmt.Errorf("creating sample kernel: %w", err)
+		}
+	}
+
 	waveGlobal, waveLocal := computeWaveKernelWorkSizes(width, height, kernel, device)
 	solver := &openCLWaveSolver{
 		context:                 context,
@@ -473,6 +542,7 @@ func newOpenCLWaveSolver(width, height int) (*openCLWaveSolver, error) {
 		program:                 program,
 		kernel:                  kernel,
 		renderKernel:            renderKernel,
+		sampleKernel:            sampleKernel,
 		applyImpulsesKernel:     applyImpulsesKernel,
 		boundaryAccumKernel:     boundaryAccumKernel,
 		currBuf:                 currBuf,
@@ -480,6 +550,7 @@ func newOpenCLWaveSolver(width, height int) (*openCLWaveSolver, error) {
 		nextBuf:                 nextBuf,
 		pixelBuf:                pixelBuf,
 		accumBuf:                accumBuf,
+		centerSampleBuf:         centerSampleBuf,
 		wallMaskBuf:             wallMaskBuf,
 		visibilityBuf:           visibilityBuf,
 		impulseIndexBuf:         impulseIndexBuf,
@@ -744,6 +815,31 @@ func (s *openCLWaveSolver) applyQueuedImpulses(field *waveField) error {
 	return nil
 }
 
+func (s *openCLWaveSolver) sampleCenter(step int) error {
+	if s.sampleKernel == nil || s.centerSampleBuf == nil {
+		return nil
+	}
+	if err := s.sampleKernel.SetArgInt32(0, int32(step)); err != nil {
+		return fmt.Errorf("setting sample step index: %w", err)
+	}
+	if err := s.sampleKernel.SetArgInt32(1, int32(s.width)); err != nil {
+		return fmt.Errorf("setting sample width: %w", err)
+	}
+	if err := s.sampleKernel.SetArgInt32(2, int32(s.height)); err != nil {
+		return fmt.Errorf("setting sample height: %w", err)
+	}
+	if err := s.sampleKernel.SetArgBuffer(3, s.currBuf); err != nil {
+		return fmt.Errorf("binding sample source buffer: %w", err)
+	}
+	if err := s.sampleKernel.SetArgBuffer(4, s.centerSampleBuf); err != nil {
+		return fmt.Errorf("binding sample target buffer: %w", err)
+	}
+	if _, err := s.queue.EnqueueNDRangeKernel(s.sampleKernel, nil, []int{1}, nil, nil); err != nil {
+		return fmt.Errorf("enqueueing sample kernel: %w", err)
+	}
+	return nil
+}
+
 func (s *openCLWaveSolver) bindDynamicBuffers() error {
 	if s.boundCurr != s.currBuf {
 		if err := s.kernel.SetArgBuffer(4, s.currBuf); err != nil {
@@ -944,6 +1040,16 @@ func (s *openCLWaveSolver) Step(field *waveField, walls []bool, steps int, walls
 	if steps > 0 {
 		scale = 1 / float32(steps)
 	}
+	if steps > 0 && s.sampleKernel != nil && s.centerSampleBuf != nil {
+		s.lastSampleCount = steps
+		s.hostCenterSamples = ensureFloat32Slice(s.hostCenterSamples, steps)
+		if s.useFP16 {
+			s.hostCenterSamplesHalf = ensureUint16Slice(s.hostCenterSamplesHalf, steps)
+		}
+	} else {
+		s.lastSampleCount = 0
+		s.centerSample = 0
+	}
 	reflect32 := float32(boundaryReflect)
 	for step := 0; step < steps; step++ {
 		if err := s.bindDynamicBuffers(); err != nil {
@@ -956,6 +1062,56 @@ func (s *openCLWaveSolver) Step(field *waveField, walls []bool, steps int, walls
 		if size > 0 {
 			if err := s.runBoundaryAccumulate(accumGlobal, scale, reflect32); err != nil {
 				return err
+			}
+			if s.sampleKernel != nil && s.centerSampleBuf != nil {
+				if err := s.sampleCenter(step); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	if steps > 0 && s.sampleKernel != nil && s.centerSampleBuf != nil {
+		byteLen := steps * s.elementBytes
+		if s.useFP16 {
+			if _, err := s.queue.EnqueueReadBuffer(s.centerSampleBuf, true, 0, byteLen, unsafe.Pointer(&s.hostCenterSamplesHalf[0]), nil); err != nil {
+				return fmt.Errorf("reading center samples (fp16): %w", err)
+			}
+			float16ToFloat32(s.hostCenterSamples, s.hostCenterSamplesHalf)
+		} else {
+			if _, err := s.queue.EnqueueReadBufferFloat32(s.centerSampleBuf, true, 0, s.hostCenterSamples[:steps], nil); err != nil {
+				return fmt.Errorf("reading center samples: %w", err)
+			}
+		}
+		s.centerSample = s.hostCenterSamples[steps-1]
+	} else if steps > 0 && size > 0 && s.width > 0 && s.height > 0 {
+		// Fallback: sample a single center value from the current buffer when
+		// per-step sampling is disabled.
+		cx := s.width / 2
+		cy := s.height / 2
+		if cx >= 0 && cx < s.width && cy >= 0 && cy < s.height {
+			idx := cy*s.width + cx
+			offset := idx * s.elementBytes
+			if s.useFP16 {
+				var raw uint16
+				if _, err := s.queue.EnqueueReadBuffer(s.currBuf, true, offset, s.elementBytes, unsafe.Pointer(&raw), nil); err == nil {
+					v := float16BitsToFloat32(raw)
+					if v > 1 {
+						v = 1
+					} else if v < -1 {
+						v = -1
+					}
+					s.centerSample = v
+				}
+			} else {
+				var v float32
+				if _, err := s.queue.EnqueueReadBuffer(s.currBuf, true, offset, s.elementBytes, unsafe.Pointer(&v), nil); err == nil {
+					if v > 1 {
+						v = 1
+					} else if v < -1 {
+						v = -1
+					}
+					s.centerSample = v
+				}
 			}
 		}
 	}
@@ -1018,6 +1174,10 @@ func (s *openCLWaveSolver) Close() {
 		s.impulseIndexBuf.Release()
 		s.impulseIndexBuf = nil
 	}
+	if s.centerSampleBuf != nil {
+		s.centerSampleBuf.Release()
+		s.centerSampleBuf = nil
+	}
 	if s.nextBuf != nil {
 		s.nextBuf.Release()
 		s.nextBuf = nil
@@ -1046,6 +1206,10 @@ func (s *openCLWaveSolver) Close() {
 		s.boundaryAccumKernel.Release()
 		s.boundaryAccumKernel = nil
 	}
+	if s.sampleKernel != nil {
+		s.sampleKernel.Release()
+		s.sampleKernel = nil
+	}
 	if s.program != nil {
 		s.program.Release()
 		s.program = nil
@@ -1069,6 +1233,17 @@ func (s *openCLWaveSolver) PixelBytes() []byte {
 		fmt.Printf("waiting for pixel readback: %v\n", err)
 	}
 	return s.hostPixels
+}
+
+func (s *openCLWaveSolver) CenterSample() float32 {
+	return s.centerSample
+}
+
+func (s *openCLWaveSolver) CenterSamples() []float32 {
+	if s.lastSampleCount <= 0 || s.lastSampleCount > len(s.hostCenterSamples) {
+		return nil
+	}
+	return s.hostCenterSamples[:s.lastSampleCount]
 }
 
 func (s *openCLWaveSolver) waitForPixelEvent() error {
