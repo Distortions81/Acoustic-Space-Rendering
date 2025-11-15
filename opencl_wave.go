@@ -149,6 +149,7 @@ __kernel void render_intensity(
     const int width,
     const int height,
     __global const real_t* curr,
+    const float gamma,
     const int show_walls,
     __global const uchar* wall_mask,
     const int use_visibility,
@@ -162,7 +163,10 @@ __kernel void render_intensity(
     }
     float value = to_float(curr[idx]);
     value = fmin(fmax(value, -1.0f), 1.0f);
-    uchar intensity = (uchar)(fabs(value) * 255.0f);
+    float brightness = fabs(value);
+    float gammaRecip = gamma > 0.0f ? 1.0f / gamma : 1.0f;
+    float corrected = pow(brightness, gammaRecip);
+    uchar intensity = (uchar)(corrected * 255.0f);
     uchar4 color = (uchar4)(intensity, intensity, intensity, (uchar)255);
     if (use_visibility) {
         if (!visibility_mask[idx]) {
@@ -611,6 +615,7 @@ func newOpenCLWaveSolver(width, height int) (*openCLWaveSolver, error) {
 		int32(width),
 		int32(height),
 		solver.accumBuf,
+		float32(visualGamma),
 		int32(0),
 		solver.wallMaskBuf,
 		int32(0),
@@ -983,7 +988,7 @@ func (s *openCLWaveSolver) setRenderFlags(showWalls bool, useVisibility bool) er
 		show = 1
 	}
 	if s.lastRenderShowWalls != show {
-		if err := s.renderKernel.SetArgInt32(3, show); err != nil {
+		if err := s.renderKernel.SetArgInt32(4, show); err != nil {
 			return err
 		}
 		s.lastRenderShowWalls = show
@@ -993,7 +998,7 @@ func (s *openCLWaveSolver) setRenderFlags(showWalls bool, useVisibility bool) er
 		useVis = 1
 	}
 	if s.lastRenderUseVisibility != useVis {
-		if err := s.renderKernel.SetArgInt32(5, useVis); err != nil {
+		if err := s.renderKernel.SetArgInt32(6, useVis); err != nil {
 			return err
 		}
 		s.lastRenderUseVisibility = useVis
