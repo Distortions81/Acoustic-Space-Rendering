@@ -8,7 +8,7 @@ import "time"
 const (
 	w, h                     = 800, 800
 	windowScale              = 2
-	damp                     = 0.9995
+	damp                     = 0.9997
 	speed                    = 0.5
 	waveDamp32               = float32(damp)
 	waveSpeed32              = float32(speed)
@@ -22,8 +22,8 @@ const (
 	maxSimMultiplier         = 1000
 	earOffsetCells           = 5
 	defaultBoundaryReflect   = 0.4
-	stepImpulseStrength      = 100.0
-	wallSegments             = 20
+	stepImpulseStrength      = 20.0
+	wallSegments             = 50
 	wallMinLen               = 12
 	wallMaxLen               = 300
 	wallExclusionRadius      = 1
