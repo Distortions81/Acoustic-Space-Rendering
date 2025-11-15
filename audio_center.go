@@ -5,7 +5,7 @@ import (
 )
 
 const (
-	audioSampleRate = 48000
+	audioSampleRate = 44100
 )
 
 type centerAudioStream struct {
