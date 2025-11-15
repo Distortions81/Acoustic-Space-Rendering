@@ -22,7 +22,7 @@ const (
 	maxSimMultiplier         = 1000
 	earOffsetCells           = 5
 	defaultBoundaryReflect   = 0.4
-	visualGamma              = 1.8
+	visualGamma              = 1.5
 	stepImpulseStrength      = 20.0
 	wallSegments             = 50
 	wallMinLen               = 12
