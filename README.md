@@ -6,8 +6,6 @@ This project uses [Ebiten](https://ebiten.org/) for graphics and an OpenCL-backe
 
 ![Acoustic Space Rendering screenshot](screenshot.png)
 
-Watch the short walkthrough on YouTube: https://youtu.be/_3t1qPdWAT0
-
 ## Ubuntu dependency setup
 
 ### 1. Common build tools
