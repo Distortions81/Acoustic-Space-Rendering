@@ -13,7 +13,7 @@ var (
 	wallReflectFlag = flag.Float64("wall-reflect", defaultBoundaryReflect, "reflection coefficient for map boundaries (0-1)")
 
 	// preferFP16Flag enables 16-bit wave buffers on devices that support half precision.
-	preferFP16Flag = flag.Bool("prefer-fp16", true, "use 16-bit floats for the OpenCL solver when supported")
+	preferFP16Flag = flag.Bool("prefer-fp16", false, "use 16-bit floats for the OpenCL solver when supported")
 
 	// recordDefaultPGO triggers a scripted walk to produce default.pgo.
 	recordDefaultPGO = flag.Bool("record-default-pgo", false, "walk randomly for 15s while capturing default.pgo")
@@ -24,6 +24,9 @@ var (
 
 	// fovDegreesFlag adjusts the field of view for visibility calculations.
 	fovDegreesFlag = flag.Float64("fov-deg", 90.0, "field of view angle for LOS (degrees)")
+
+	// lastFrameOnlyFlag forces the renderer to show only the most recent frame.
+	lastFrameOnlyFlag = flag.Bool("show-last-frame", false, "render only the latest simulation frame instead of the blended accumulation")
 
 	// debugFlag enables the FPS and simulation overlay.
 	debugFlag = flag.Bool("debug", true, "show FPS and simulation speed overlay")

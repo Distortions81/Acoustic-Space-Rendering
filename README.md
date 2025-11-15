@@ -83,5 +83,6 @@ Customize simulation behavior with additional flags:
 - `-enable-audio=<true|false>` — toggles experimental audio output driven by the simulator’s center samples; enable it to hear the impulse stream.
 - `-audio-loop=<path>` — when audio is enabled, specify a WAV file (RIFF/PCM) that is resampled to 44.1 kHz and used to drive the emitter’s pressure waveform; audio output still comes from the simulator’s center sample stream.
 - `-disable-walking-pulses=<true|false>` — when `true`, walking no longer queues the default impulse pulses so you only see the WAV-driven source or the silent field.
+- `-show-last-frame=<true|false>` — when `true`, render only the most recent simulation frame instead of blending values across previous steps so you can inspect the raw wavefront (default `false`).
 
 By default the application already runs with `-debug`, `-enable-audio`, `-capture-step-samples`, and `-disable-walking-pulses` while looping `test.wav`. Pass flag overrides such as `-debug=false` or `-audio-loop=their.wav` to change that behavior.

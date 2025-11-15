@@ -54,6 +54,7 @@ type openCLWaveSolver struct {
 	visibleMaskSynced       bool
 	lastRenderShowWalls     int32
 	lastRenderUseVisibility int32
+	lastRenderSource        *cl.MemObject
 	debugVerify             bool
 	debugScratch            []float32
 	debugScratch16          []uint16
@@ -585,6 +586,7 @@ func newOpenCLWaveSolver(width, height int) (*openCLWaveSolver, error) {
 		hostVisibility:          make([]byte, size),
 		lastRenderShowWalls:     -1,
 		lastRenderUseVisibility: -1,
+		lastRenderSource:        accumBuf,
 		debugVerify:             verifyOpenCLSyncFlag != nil && *verifyOpenCLSyncFlag,
 	}
 
@@ -1006,7 +1008,25 @@ func (s *openCLWaveSolver) setRenderFlags(showWalls bool, useVisibility bool) er
 	return nil
 }
 
-func (s *openCLWaveSolver) Step(field *waveField, walls []bool, steps int, wallsDirty bool, showWalls bool, occludeLOS bool, visibleStamp []uint32, visibleGen uint32, emitter *audioEmitterData) error {
+func (s *openCLWaveSolver) setRenderSource(lastFrameOnly bool) error {
+	source := s.accumBuf
+	if lastFrameOnly {
+		source = s.currBuf
+	}
+	if source == nil {
+		return errors.New("render buffer is not available")
+	}
+	if s.lastRenderSource == source {
+		return nil
+	}
+	if err := s.renderKernel.SetArgBuffer(2, source); err != nil {
+		return err
+	}
+	s.lastRenderSource = source
+	return nil
+}
+
+func (s *openCLWaveSolver) Step(field *waveField, walls []bool, steps int, wallsDirty bool, showWalls bool, lastFrameOnly bool, occludeLOS bool, visibleStamp []uint32, visibleGen uint32, emitter *audioEmitterData) error {
 	if steps <= 0 {
 		return nil
 	}
@@ -1168,6 +1188,9 @@ func (s *openCLWaveSolver) Step(field *waveField, walls []bool, steps int, walls
 				}
 			}
 		}
+	}
+	if err := s.setRenderSource(lastFrameOnly); err != nil {
+		return fmt.Errorf("configuring render source: %w", err)
 	}
 	if err := s.setRenderFlags(showWalls, useVisibility); err != nil {
 		return fmt.Errorf("configuring render overlays: %w", err)

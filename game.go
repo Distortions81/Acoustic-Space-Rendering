@@ -168,7 +168,7 @@ func (g *Game) Update() error {
 		}
 	}
 
-	if err := g.gpuSolver.Step(g.field, g.walls, steps, g.wallsDirty, *showWallsFlag, *occludeLineOfSightFlag, visibleStamp, visibleGen, emitterData); err != nil {
+	if err := g.gpuSolver.Step(g.field, g.walls, steps, g.wallsDirty, *showWallsFlag, *lastFrameOnlyFlag, *occludeLineOfSightFlag, visibleStamp, visibleGen, emitterData); err != nil {
 		return err
 	}
 	if g.audioStream != nil && g.gpuSolver != nil {
