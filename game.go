@@ -28,6 +28,7 @@ type Game struct {
 
 	autoWalk           bool
 	autoWalkDeadline   time.Time
+	lastSampleLog      time.Time
 	autoWalkRand       *rand.Rand
 	autoWalkDirX       float64
 	autoWalkDirY       float64
@@ -74,6 +75,7 @@ func newGame() *Game {
 				log.Printf("Audio player creation failed: %v", err)
 			} else {
 				g.audioPlayer = player
+				g.audioPlayer.SetBufferSize(audioPlayerBufferLatency)
 				g.audioPlayer.Play()
 			}
 		}
@@ -146,8 +148,43 @@ func (g *Game) Update() error {
 	if g.audioStream != nil && g.gpuSolver != nil {
 		g.audioStream.SetSample(g.gpuSolver.CenterSample())
 	}
+	if captureStepSamplesFlag != nil && *captureStepSamplesFlag && g.gpuSolver != nil {
+		if samples := g.gpuSolver.CenterSamples(); len(samples) > 0 {
+			if g.audioStream != nil {
+				g.audioStream.Enqueue(samples)
+			}
+			g.logCapturedCenterSamples(samples)
+		}
+	}
 	g.wallsDirty = false
 	g.lastSimDuration = time.Since(simStart)
 
 	return nil
+}
+
+func (g *Game) logCapturedCenterSamples(samples []float32) {
+	if len(samples) == 0 {
+		return
+	}
+	now := time.Now()
+	if now.Sub(g.lastSampleLog) < sampleCaptureLogInterval {
+		return
+	}
+	minVal := samples[0]
+	maxVal := samples[0]
+	var sum float32
+	for _, v := range samples {
+		if v < minVal {
+			minVal = v
+		}
+		if v > maxVal {
+			maxVal = v
+		}
+		sum += v
+	}
+	avg := sum / float32(len(samples))
+	last := samples[len(samples)-1]
+	log.Printf("Captured %d center samples (min %.3f max %.3f avg %.3f last %.3f)",
+		len(samples), minVal, maxVal, avg, last)
+	g.lastSampleLog = now
 }

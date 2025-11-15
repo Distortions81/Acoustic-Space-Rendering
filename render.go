@@ -28,6 +28,7 @@ func (g *Game) Draw(screen *ebiten.Image) {
 		}
 	}
 	g.drawEarIndicators(screen, int(g.ex), int(g.ey))
+	g.drawAudioSampleMarker(screen)
 
 	if *debugFlag {
 		fps := ebiten.ActualFPS()
@@ -64,6 +65,25 @@ func (g *Game) drawEarIndicators(screen *ebiten.Image, cx, cy int) {
 	}
 	if rightX >= 0 && rightX < w && rightY >= 0 && rightY < h {
 		screen.Set(rightX, rightY, color.RGBA{0, 200, 255, 255})
+	}
+}
+
+func (g *Game) drawAudioSampleMarker(screen *ebiten.Image) {
+	centerX := w / 2
+	centerY := h / 2
+	dotColor := color.RGBA{255, 40, 40, 255}
+	for dy := -1; dy <= 1; dy++ {
+		y := centerY + dy
+		if y < 0 || y >= h {
+			continue
+		}
+		for dx := -1; dx <= 1; dx++ {
+			x := centerX + dx
+			if x < 0 || x >= w {
+				continue
+			}
+			screen.Set(x, y, dotColor)
+		}
 	}
 }
 
