@@ -26,19 +26,19 @@ var (
 	fovDegreesFlag = flag.Float64("fov-deg", 90.0, "field of view angle for LOS (degrees)")
 
 	// debugFlag enables the FPS and simulation overlay.
-	debugFlag = flag.Bool("debug", false, "show FPS and simulation speed overlay")
+	debugFlag = flag.Bool("debug", true, "show FPS and simulation speed overlay")
 
 	verifyOpenCLSyncFlag = flag.Bool("verify-opencl-sync", false, "compare OpenCL buffers before/after simulation steps when skipping host uploads")
 
 	// enableAudioFlag toggles optional audio output driven by center samples.
-	enableAudioFlag = flag.Bool("enable-audio", false, "enable experimental audio output from center samples")
+	enableAudioFlag = flag.Bool("enable-audio", true, "enable experimental audio output from center samples")
 
 	// audioLoopFlag lets the user provide a WAV file that will loop instead of the impulse samples.
-	audioLoopFlag = flag.String("audio-loop", "", "path to a WAV file to loop when audio output is enabled")
+	audioLoopFlag = flag.String("audio-loop", "test.wav", "path to a WAV file to loop when audio output is enabled")
 
 	// disableWalkingPulsesFlag suppresses the walking-generated pressure pulses.
-	disableWalkingPulsesFlag = flag.Bool("disable-walking-pulses", false, "prevent movement from queuing impulses into the wave field")
+	disableWalkingPulsesFlag = flag.Bool("disable-walking-pulses", true, "prevent movement from queuing impulses into the wave field")
 
 	// captureStepSamplesFlag enables per-step center sampling on the GPU.
-	captureStepSamplesFlag = flag.Bool("capture-step-samples", false, "capture per-step center samples on the GPU (higher GPU/CPU overhead)")
+	captureStepSamplesFlag = flag.Bool("capture-step-samples", true, "capture per-step center samples on the GPU (higher GPU/CPU overhead)")
 )
