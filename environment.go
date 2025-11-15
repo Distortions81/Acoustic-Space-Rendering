@@ -51,6 +51,7 @@ func (g *Game) generateWalls() {
 		}
 	}
 	g.lastVisCX, g.lastVisCY = -1, -1
+	g.wallsDirty = true
 }
 
 // trySetWall marks a grid cell as a wall while enforcing spacing from the emitter.

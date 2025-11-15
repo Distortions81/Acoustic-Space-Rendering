@@ -11,50 +11,24 @@ import (
 
 // Draw renders the current wave field, ear indicators, and optional overlays.
 func (g *Game) Draw(screen *ebiten.Image) {
-	if len(g.pixelBuf) != w*h*4 {
-		g.pixelBuf = make([]byte, w*h*4)
-	}
-	img := g.pixelBuf
-	showWalls := *showWallsFlag
-	occludeLOS := *occludeLineOfSightFlag
-	for i := 0; i < w*h; i++ {
-		base := i * 4
-		if occludeLOS && (len(g.visibleStamp) == w*h) && !(g.visibleStamp[i] == g.visibleGen) {
-			img[base] = 0
-			img[base+1] = 0
-			img[base+2] = 0
-			img[base+3] = 255
-			continue
+	if g.gpuSolver != nil {
+		pixels := g.gpuSolver.PixelBytes()
+		if len(pixels) == w*h*4 {
+			screen.WritePixels(pixels)
 		}
-		if showWalls && len(g.walls) > 0 && g.walls[i] {
-			img[base] = 30
-			img[base+1] = 40
-			img[base+2] = 80
-			img[base+3] = 255
-			continue
-		}
-		x := i % w
-		y := i / w
-		v := g.field.readCurr(x, y)
-		v = float32(math.Max(-1, math.Min(1, float64(v))))
-		intensity := byte(math.Abs(float64(v)) * 255)
-		img[base] = intensity
-		img[base+1] = intensity
-		img[base+2] = intensity
-		img[base+3] = 255
 	}
-	screen.WritePixels(img)
 
-	for y := -emitterRad; y <= emitterRad; y++ {
-		for x := -emitterRad; x <= emitterRad; x++ {
-			cx := int(g.ex) + x
-			cy := int(g.ey) + y
-			if cx >= 0 && cx < w && cy >= 0 && cy < h {
-				screen.Set(cx, cy, color.RGBA{255, 0, 0, 255})
-			}
+	baseX := int(g.ex)
+	baseY := int(g.ey)
+	for _, offset := range emitterFootprint {
+		cx := baseX + offset.dx
+		cy := baseY + offset.dy
+		if cx >= 0 && cx < w && cy >= 0 && cy < h {
+			screen.Set(cx, cy, color.RGBA{255, 0, 0, 255})
 		}
 	}
 	g.drawEarIndicators(screen, int(g.ex), int(g.ey))
+	g.drawAudioSampleMarker(screen)
 
 	if *debugFlag {
 		fps := ebiten.ActualFPS()
@@ -91,6 +65,25 @@ func (g *Game) drawEarIndicators(screen *ebiten.Image, cx, cy int) {
 	}
 	if rightX >= 0 && rightX < w && rightY >= 0 && rightY < h {
 		screen.Set(rightX, rightY, color.RGBA{0, 200, 255, 255})
+	}
+}
+
+func (g *Game) drawAudioSampleMarker(screen *ebiten.Image) {
+	centerX := w / 2
+	centerY := h / 2
+	dotColor := color.RGBA{255, 40, 40, 255}
+	for dy := -1; dy <= 1; dy++ {
+		y := centerY + dy
+		if y < 0 || y >= h {
+			continue
+		}
+		for dx := -1; dx <= 1; dx++ {
+			x := centerX + dx
+			if x < 0 || x >= w {
+				continue
+			}
+			screen.Set(x, y, dotColor)
+		}
 	}
 }
 

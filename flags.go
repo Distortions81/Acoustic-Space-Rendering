@@ -12,6 +12,9 @@ var (
 	// wallReflectFlag adjusts how strongly the simulation boundaries reflect waves.
 	wallReflectFlag = flag.Float64("wall-reflect", defaultBoundaryReflect, "reflection coefficient for map boundaries (0-1)")
 
+	// preferFP16Flag enables 16-bit wave buffers on devices that support half precision.
+	preferFP16Flag = flag.Bool("prefer-fp16", false, "use 16-bit floats for the OpenCL solver when supported")
+
 	// recordDefaultPGO triggers a scripted walk to produce default.pgo.
 	recordDefaultPGO = flag.Bool("record-default-pgo", false, "walk randomly for 15s while capturing default.pgo")
 
@@ -22,21 +25,23 @@ var (
 	// fovDegreesFlag adjusts the field of view for visibility calculations.
 	fovDegreesFlag = flag.Float64("fov-deg", 90.0, "field of view angle for LOS (degrees)")
 
-	// threadCountFlag specifies how many worker goroutines to run.
-	threadCountFlag = flag.Int("threads", 0, "number of worker threads; 0 auto-detects")
+	// lastFrameOnlyFlag forces the renderer to show only the most recent frame.
+	lastFrameOnlyFlag = flag.Bool("show-last-frame", false, "render only the latest simulation frame instead of the blended accumulation")
 
 	// debugFlag enables the FPS and simulation overlay.
-	debugFlag = flag.Bool("debug", false, "show FPS and simulation speed overlay")
+	debugFlag = flag.Bool("debug", true, "show FPS and simulation speed overlay")
 
-	// useOpenCLFlag enables the optional OpenCL solver.
-	useOpenCLFlag = flag.Bool("use-opencl", true, "attempt to run the wave simulation via OpenCL (build with -tags opencl)")
+	verifyOpenCLSyncFlag = flag.Bool("verify-opencl-sync", false, "compare OpenCL buffers before/after simulation steps when skipping host uploads")
 
-	// adaptiveStepScalingFlag enables scaling physics work with ActualTPS.
-	adaptiveStepScalingFlag = flag.Bool("scale-steps-with-tps", false, "scale the per-frame physics work based on ActualTPS instead of using a fixed batch size")
+	// enableAudioFlag toggles optional audio output driven by center samples.
+	enableAudioFlag = flag.Bool("enable-audio", true, "enable experimental audio output from center samples")
 
-	// maxStepBurstFlag limits how aggressively the simulation catches up.
-	maxStepBurstFlag = flag.Int("max-step-burst", 4, "maximum multiple of the base physics step count to execute when recovering from lag while step scaling is enabled (0 disables the clamp)")
+	// audioLoopFlag lets the user provide a WAV file that will loop instead of the impulse samples.
+	audioLoopFlag = flag.String("audio-loop", "test.wav", "path to a WAV file to loop when audio output is enabled")
 
-	// disableAudioFlag skips all audio initialization and playback.
-	disableAudioFlag = flag.Bool("disable-audio", true, "skip audio initialization and waveform streaming")
+	// disableWalkingPulsesFlag suppresses the walking-generated pressure pulses.
+	disableWalkingPulsesFlag = flag.Bool("disable-walking-pulses", true, "prevent movement from queuing impulses into the wave field")
+
+	// captureStepSamplesFlag enables per-step center sampling on the GPU.
+	captureStepSamplesFlag = flag.Bool("capture-step-samples", true, "capture per-step center samples on the GPU (higher GPU/CPU overhead)")
 )
