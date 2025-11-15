@@ -70,6 +70,11 @@ type openCLWaveSolver struct {
 	lastSampleCount         int
 }
 
+type audioEmitterData struct {
+	index   int32
+	samples []float32
+}
+
 const verifyTolerance = 1e-4
 
 const waveKernelSource = `#ifdef USE_FP16
@@ -91,7 +96,9 @@ __kernel void wave_step(
     __global const real_t* curr,
     __global const real_t* prev,
     __global real_t* next_buffer,
-    __global const uchar* wall_mask)
+    __global const uchar* wall_mask,
+    const int emitter_index,
+    const real_t emitter_value)
 {
     int x = get_global_id(0);
     int y = get_global_id(1);
@@ -116,7 +123,12 @@ __kernel void wave_step(
     const real_t four = to_real(4.0f);
     real_t center = curr[idx];
     real_t laplacian = curr[left] + curr[right] + curr[top] + curr[bottom] - four * center;
-    next_buffer[idx] = ((two * center - prev[idx]) + speed_r * laplacian) * damp_r;
+    real_t next_val = ((two * center - prev[idx]) + speed_r * laplacian) * damp_r;
+    if (idx == emitter_index && emitter_index >= 0) {
+        next_buffer[idx] = emitter_value;
+    } else {
+        next_buffer[idx] = next_val;
+    }
 }
 
 __kernel void apply_impulses(
@@ -591,6 +603,10 @@ func newOpenCLWaveSolver(width, height int) (*openCLWaveSolver, error) {
 		solver.Close()
 		return nil, fmt.Errorf("setting kernel arguments: %w", err)
 	}
+	if err := solver.setEmitterArgs(-1, 0); err != nil {
+		solver.Close()
+		return nil, fmt.Errorf("setting kernel emitter defaults: %w", err)
+	}
 	if err := solver.renderKernel.SetArgs(
 		int32(width),
 		int32(height),
@@ -840,6 +856,21 @@ func (s *openCLWaveSolver) sampleCenter(step int) error {
 	return nil
 }
 
+func (s *openCLWaveSolver) setEmitterArgs(index int32, value float32) error {
+	if err := s.kernel.SetArgInt32(8, index); err != nil {
+		return err
+	}
+	return s.setEmitterValue(value)
+}
+
+func (s *openCLWaveSolver) setEmitterValue(val float32) error {
+	if s.useFP16 {
+		half := float32ToFloat16Bits(val)
+		return s.kernel.SetArgUnsafe(9, int(unsafe.Sizeof(half)), unsafe.Pointer(&half))
+	}
+	return s.kernel.SetArgFloat32(9, val)
+}
+
 func (s *openCLWaveSolver) bindDynamicBuffers() error {
 	if s.boundCurr != s.currBuf {
 		if err := s.kernel.SetArgBuffer(4, s.currBuf); err != nil {
@@ -970,13 +1001,21 @@ func (s *openCLWaveSolver) setRenderFlags(showWalls bool, useVisibility bool) er
 	return nil
 }
 
-func (s *openCLWaveSolver) Step(field *waveField, walls []bool, steps int, wallsDirty bool, showWalls bool, occludeLOS bool, visibleStamp []uint32, visibleGen uint32) error {
+func (s *openCLWaveSolver) Step(field *waveField, walls []bool, steps int, wallsDirty bool, showWalls bool, occludeLOS bool, visibleStamp []uint32, visibleGen uint32, emitter *audioEmitterData) error {
 	if steps <= 0 {
 		return nil
 	}
 	size := s.width * s.height
 	if len(field.curr) != size || len(field.prev) != size || len(field.next) != size {
 		return fmt.Errorf("unexpected field buffer size")
+	}
+	var emitterIndex int32 = -1
+	var emitterSamples []float32
+	if emitter != nil && emitter.index >= 0 && len(emitter.samples) > 0 {
+		if int(emitter.index) < size {
+			emitterIndex = emitter.index
+			emitterSamples = emitter.samples
+		}
 	}
 	if s.coldStart && size > 0 {
 		if err := s.writeFieldBuffer(s.currBuf, field.curr, &s.hostCurrHalf); err != nil {
@@ -1051,7 +1090,17 @@ func (s *openCLWaveSolver) Step(field *waveField, walls []bool, steps int, walls
 		s.centerSample = 0
 	}
 	reflect32 := float32(boundaryReflect)
+	if err := s.setEmitterArgs(emitterIndex, 0); err != nil {
+		return fmt.Errorf("setting emitter args: %w", err)
+	}
 	for step := 0; step < steps; step++ {
+		emitterValue := float32(0)
+		if emitterIndex >= 0 && step < len(emitterSamples) {
+			emitterValue = emitterSamples[step]
+		}
+		if err := s.setEmitterValue(emitterValue); err != nil {
+			return fmt.Errorf("setting emitter value: %w", err)
+		}
 		if err := s.bindDynamicBuffers(); err != nil {
 			return fmt.Errorf("binding buffers: %w", err)
 		}

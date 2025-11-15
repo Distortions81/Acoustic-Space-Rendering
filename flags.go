@@ -33,6 +33,12 @@ var (
 	// enableAudioFlag toggles optional audio output driven by center samples.
 	enableAudioFlag = flag.Bool("enable-audio", false, "enable experimental audio output from center samples")
 
+	// audioLoopFlag lets the user provide a WAV file that will loop instead of the impulse samples.
+	audioLoopFlag = flag.String("audio-loop", "", "path to a WAV file to loop when audio output is enabled")
+
+	// disableWalkingPulsesFlag suppresses the walking-generated pressure pulses.
+	disableWalkingPulsesFlag = flag.Bool("disable-walking-pulses", false, "prevent movement from queuing impulses into the wave field")
+
 	// captureStepSamplesFlag enables per-step center sampling on the GPU.
 	captureStepSamplesFlag = flag.Bool("capture-step-samples", false, "capture per-step center samples on the GPU (higher GPU/CPU overhead)")
 )
