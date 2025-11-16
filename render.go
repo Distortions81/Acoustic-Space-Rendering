@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"image/color"
+	"math"
 
 	"github.com/hajimehoshi/ebiten/v2"
 	"github.com/hajimehoshi/ebiten/v2/ebitenutil"
@@ -32,6 +33,7 @@ func (g *Game) Draw(screen *ebiten.Image) {
 
 	g.drawWallsOverlay(screen)
 	g.drawEmitterIndicator(screen)
+	g.drawLevelMap(screen)
 
 	if *debugFlag {
 		fps := ebiten.ActualFPS()
@@ -167,4 +169,67 @@ func (g *Game) drawWallsOverlay(screen *ebiten.Image) {
 			ebitenutil.DrawRect(screen, x, y, width, height, wallColor)
 		}
 	}
+}
+
+func (g *Game) drawLevelMap(screen *ebiten.Image) {
+	if screen == nil || !g.showLevelMap || g.levelData == nil {
+		return
+	}
+	level := g.levelData
+	if level.Size.Width <= 0 || level.Size.Height <= 0 {
+		return
+	}
+	const overlayFraction = 0.35
+	const overlayPadding = 16.0
+	maxWidth := float64(windowWidth) * overlayFraction
+	maxHeight := float64(windowHeight) * overlayFraction
+	if maxWidth <= 0 || maxHeight <= 0 {
+		return
+	}
+	scale := math.Min(maxWidth/float64(level.Size.Width), maxHeight/float64(level.Size.Height))
+	if scale <= 0 {
+		return
+	}
+	mapWidth := float64(level.Size.Width) * scale
+	mapHeight := float64(level.Size.Height) * scale
+	mapX := float64(windowWidth) - mapWidth - overlayPadding
+	if mapX < overlayPadding {
+		mapX = overlayPadding
+	}
+	mapY := overlayPadding
+	borderMargin := 4.0
+	ebitenutil.DrawRect(screen, mapX-borderMargin, mapY-borderMargin, mapWidth+borderMargin*2, mapHeight+borderMargin*2, color.RGBA{0, 0, 0, 180})
+
+	wallColor := color.RGBA{70, 130, 190, 200}
+	for _, rect := range level.Walls {
+		if rect.W <= 0 || rect.H <= 0 {
+			continue
+		}
+		x := mapX + float64(rect.X)*scale
+		y := mapY + float64(rect.Y)*scale
+		width := float64(rect.W) * scale
+		height := float64(rect.H) * scale
+		if width <= 0 || height <= 0 {
+			continue
+		}
+		ebitenutil.DrawRect(screen, x, y, width, height, wallColor)
+	}
+
+	playerLevelX := clampFloat(g.ex*float64(simulationResolutionDivisor), 0, float64(level.Size.Width))
+	playerLevelY := clampFloat(g.ey*float64(simulationResolutionDivisor), 0, float64(level.Size.Height))
+	dotSize := math.Max(4.0, scale*4.0)
+	px := mapX + playerLevelX*scale
+	py := mapY + playerLevelY*scale
+	playerColor := color.RGBA{255, 190, 70, 255}
+	ebitenutil.DrawRect(screen, px-dotSize/2, py-dotSize/2, dotSize, dotSize, playerColor)
+}
+
+func clampFloat(value, minVal, maxVal float64) float64 {
+	if value < minVal {
+		return minVal
+	}
+	if value > maxVal {
+		return maxVal
+	}
+	return value
 }
