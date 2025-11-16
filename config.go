@@ -7,20 +7,19 @@ import "time"
 // the acoustic wave simulation.
 const (
 	w, h                   = 1920, 1080
-	windowScale            = 1
+	windowScale            = 2
 	damp                   = 0.999
 	speed                  = 0.5
 	waveDamp32             = float32(damp)
 	waveSpeed32            = float32(speed)
-	emitterRad             = 1
+	emitterRad             = 5
 	moveSpeed              = 2
-	stepDelay              = 60 / 4
+	stepDelay              = defaultTPS / 4
 	defaultTPS             = 60.0
 	defaultSimMultiplier   = 10
 	simMultiplierStep      = 10
 	minSimMultiplier       = 1
 	maxSimMultiplier       = 1000
-	earOffsetCells         = 5
 	defaultBoundaryReflect = 0.4
 	stepImpulseStrength    = 10.0
 	wallSegments           = 20

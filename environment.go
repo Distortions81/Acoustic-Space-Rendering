@@ -1,7 +1,6 @@
 package main
 
 import (
-	"math"
 	"math/rand"
 	"time"
 )
@@ -78,37 +77,4 @@ func (g *Game) isWall(x, y int) bool {
 		return false
 	}
 	return g.walls[y*w+x]
-}
-
-// earOffsets computes the ear indicator positions relative to the listener.
-func (g *Game) earOffsets() (int, int) {
-	fx, fy := g.listenerForwardX, g.listenerForwardY
-	if fx == 0 && fy == 0 {
-		fy = -1
-	}
-	earVecX := -fy
-	earVecY := fx
-	length := math.Hypot(earVecX, earVecY)
-	if length == 0 {
-		return earOffsetCells, 0
-	}
-	scale := float64(earOffsetCells) / length
-	ox := int(math.Round(earVecX * scale))
-	oy := int(math.Round(earVecY * scale))
-	if ox == 0 && oy == 0 {
-		if math.Abs(earVecX) >= math.Abs(earVecY) {
-			if earVecX >= 0 {
-				ox = earOffsetCells
-			} else {
-				ox = -earOffsetCells
-			}
-		} else {
-			if earVecY >= 0 {
-				oy = earOffsetCells
-			} else {
-				oy = -earOffsetCells
-			}
-		}
-	}
-	return ox, oy
 }
