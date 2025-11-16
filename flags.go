@@ -29,4 +29,12 @@ var (
 	debugFlag = flag.Bool("debug", false, "show FPS and simulation speed overlay")
 
 	verifyOpenCLSyncFlag = flag.Bool("verify-opencl-sync", false, "compare OpenCL buffers before/after simulation steps when skipping host uploads")
+
+	// viewport controls how much of the world is rendered and simulated.
+	viewportWidthFlag  = flag.Int("viewport-width", defaultViewportWidth, "horizontal span of the simulated viewport in grid cells")
+	viewportHeightFlag = flag.Int("viewport-height", defaultViewportHeight, "vertical span of the simulated viewport in grid cells")
+
+	// block dimensions break the world into chucks that can be enabled per frame.
+	blockWidthFlag  = flag.Int("block-width", defaultBlockWidth, "width of a simulation block (cells)")
+	blockHeightFlag = flag.Int("block-height", defaultBlockHeight, "height of a simulation block (cells)")
 )

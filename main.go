@@ -1,12 +1,12 @@
 package main
 
 import (
-    "flag"
-    "log"
-    "os"
-    "time"
+	"flag"
+	"log"
+	"os"
+	"time"
 
-    "github.com/hajimehoshi/ebiten/v2"
+	"github.com/hajimehoshi/ebiten/v2"
 )
 
 // main configures the runtime, optionally records a profile, and launches Ebiten.
@@ -18,7 +18,11 @@ func main() {
 	} else if boundaryReflect > 1 {
 		boundaryReflect = 1
 	}
-    var stopProfile func()
+	viewportWidth = clampRange(*viewportWidthFlag, 1, w)
+	viewportHeight = clampRange(*viewportHeightFlag, 1, h)
+	blockWidth = clampRange(*blockWidthFlag, 1, w)
+	blockHeight = clampRange(*blockHeightFlag, 1, h)
+	var stopProfile func()
 	if *recordDefaultPGO {
 		var err error
 		stopProfile, err = startDefaultPGORecording("default.pgo")
@@ -28,7 +32,7 @@ func main() {
 		defer stopProfile()
 	}
 
-    g := newGame()
+	g := newGame()
 	if *recordDefaultPGO {
 		g.enableAutoWalk(pgoRecordDuration)
 		go func(stop func()) {
@@ -40,9 +44,19 @@ func main() {
 		}(stopProfile)
 	}
 
-	ebiten.SetWindowSize(w*windowScale, h*windowScale)
+	ebiten.SetWindowSize(viewportWidth*windowScale, viewportHeight*windowScale)
 	ebiten.SetWindowTitle("Acoustic Steps")
 	if err := ebiten.RunGame(g); err != nil {
 		panic(err)
 	}
+}
+
+func clampRange(value, minVal, maxVal int) int {
+	if value < minVal {
+		return minVal
+	}
+	if value > maxVal {
+		return maxVal
+	}
+	return value
 }

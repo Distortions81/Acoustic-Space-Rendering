@@ -7,7 +7,7 @@ import "time"
 // the acoustic wave simulation.
 const (
 	w, h                   = 1920, 1080
-	windowScale            = 2
+	windowScale            = 1
 	damp                   = 0.999
 	speed                  = 0.5
 	waveDamp32             = float32(damp)
@@ -21,13 +21,24 @@ const (
 	minSimMultiplier       = 1
 	maxSimMultiplier       = 1000
 	defaultBoundaryReflect = 0.4
-	stepImpulseStrength    = 10.0
+	stepImpulseStrength    = 1.0
 	wallSegments           = 20
 	wallMinLen             = 12
 	wallMaxLen             = 300
 	wallExclusionRadius    = 1
 	wallThicknessVariance  = 5
 	pgoRecordDuration      = 15 * time.Second
+	defaultViewportWidth   = w
+	defaultViewportHeight  = h
+	defaultBlockWidth      = 128
+	defaultBlockHeight     = 128
+)
+
+var (
+	viewportWidth  = defaultViewportWidth
+	viewportHeight = defaultViewportHeight
+	blockWidth     = defaultBlockWidth
+	blockHeight    = defaultBlockHeight
 )
 
 var boundaryReflect = defaultBoundaryReflect

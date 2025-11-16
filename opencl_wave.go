@@ -26,6 +26,7 @@ type openCLWaveSolver struct {
 	accumBuf                *cl.MemObject
 	wallMaskBuf             *cl.MemObject
 	visibilityBuf           *cl.MemObject
+	blockMaskBuf            *cl.MemObject
 	impulseIndexBuf         *cl.MemObject
 	impulseValueBuf         *cl.MemObject
 	width                   int
@@ -44,6 +45,7 @@ type openCLWaveSolver struct {
 	hostPixels              []byte
 	hostWallMask            []byte
 	hostVisibility          []byte
+	hostBlockMask           []byte
 	pixelMu                 sync.Mutex
 	pixelEvent              *cl.Event
 	uploadedVisibleGen      uint32
@@ -85,7 +87,8 @@ __kernel void wave_step(
     __global const real_t* curr,
     __global const real_t* prev,
     __global real_t* next_buffer,
-    __global const uchar* wall_mask)
+    __global const uchar* wall_mask,
+    __global const uchar* block_mask)
 {
     int x = get_global_id(0);
     int y = get_global_id(1);
@@ -93,6 +96,10 @@ __kernel void wave_step(
         return;
     }
     int idx = y * width + x;
+    if (!block_mask[idx]) {
+        next_buffer[idx] = curr[idx];
+        return;
+    }
     if (wall_mask[idx]) {
         next_buffer[idx] = (real_t)0.0f;
         return;
@@ -428,6 +435,24 @@ func newOpenCLWaveSolver(width, height int) (*openCLWaveSolver, error) {
 		context.Release()
 		return nil, fmt.Errorf("allocating visibility buffer: %w", err)
 	}
+	blockMaskBuf, err := context.CreateEmptyBuffer(cl.MemReadOnly, size)
+	if err != nil {
+		visibilityBuf.Release()
+		wallMaskBuf.Release()
+		pixelBuf.Release()
+		accumBuf.Release()
+		nextBuf.Release()
+		prevBuf.Release()
+		currBuf.Release()
+		applyImpulsesKernel.Release()
+		boundaryAccumKernel.Release()
+		renderKernel.Release()
+		kernel.Release()
+		program.Release()
+		queue.Release()
+		context.Release()
+		return nil, fmt.Errorf("allocating block mask buffer: %w", err)
+	}
 	impulseIndexBuf, err := context.CreateEmptyBuffer(cl.MemReadOnly, size*int(unsafe.Sizeof(int32(0))))
 	if err != nil {
 		visibilityBuf.Release()
@@ -482,6 +507,7 @@ func newOpenCLWaveSolver(width, height int) (*openCLWaveSolver, error) {
 		accumBuf:                accumBuf,
 		wallMaskBuf:             wallMaskBuf,
 		visibilityBuf:           visibilityBuf,
+		blockMaskBuf:            blockMaskBuf,
 		impulseIndexBuf:         impulseIndexBuf,
 		impulseValueBuf:         impulseValueBuf,
 		width:                   width,
@@ -496,6 +522,7 @@ func newOpenCLWaveSolver(width, height int) (*openCLWaveSolver, error) {
 		hostPixels:              make([]byte, size*4),
 		hostWallMask:            make([]byte, size),
 		hostVisibility:          make([]byte, size),
+		hostBlockMask:           make([]byte, size),
 		lastRenderShowWalls:     -1,
 		lastRenderUseVisibility: -1,
 		debugVerify:             verifyOpenCLSyncFlag != nil && *verifyOpenCLSyncFlag,
@@ -516,6 +543,7 @@ func newOpenCLWaveSolver(width, height int) (*openCLWaveSolver, error) {
 		solver.prevBuf,
 		solver.nextBuf,
 		solver.wallMaskBuf,
+		solver.blockMaskBuf,
 	); err != nil {
 		solver.Close()
 		return nil, fmt.Errorf("setting kernel arguments: %w", err)
@@ -790,6 +818,21 @@ func (s *openCLWaveSolver) refreshWallMask(walls []bool) error {
 	return nil
 }
 
+func (s *openCLWaveSolver) refreshBlockMask(mask []byte) error {
+	size := s.width * s.height
+	if len(mask) != size {
+		return fmt.Errorf("unexpected block mask size")
+	}
+	if size == 0 {
+		return nil
+	}
+	copy(s.hostBlockMask, mask)
+	if _, err := s.queue.EnqueueWriteBuffer(s.blockMaskBuf, false, 0, size, unsafe.Pointer(&s.hostBlockMask[0]), nil); err != nil {
+		return fmt.Errorf("writing block mask buffer: %w", err)
+	}
+	return nil
+}
+
 func (s *openCLWaveSolver) refreshVisibilityMask(stamp []uint32, gen uint32) error {
 	size := s.width * s.height
 	if len(stamp) != size {
@@ -874,7 +917,7 @@ func (s *openCLWaveSolver) setRenderFlags(showWalls bool, useVisibility bool) er
 	return nil
 }
 
-func (s *openCLWaveSolver) Step(field *waveField, walls []bool, steps int, wallsDirty bool, showWalls bool, occludeLOS bool, visibleStamp []uint32, visibleGen uint32) error {
+func (s *openCLWaveSolver) Step(field *waveField, walls []bool, steps int, wallsDirty bool, showWalls bool, occludeLOS bool, visibleStamp []uint32, visibleGen uint32, blockMask []byte, blockMaskDirty bool) error {
 	if steps <= 0 {
 		return nil
 	}
@@ -906,6 +949,11 @@ func (s *openCLWaveSolver) Step(field *waveField, walls []bool, steps int, walls
 	}
 	if !s.wallMaskSynced || wallsDirty {
 		if err := s.refreshWallMask(walls); err != nil {
+			return err
+		}
+	}
+	if blockMaskDirty {
+		if err := s.refreshBlockMask(blockMask); err != nil {
 			return err
 		}
 	}
@@ -1005,6 +1053,10 @@ func (s *openCLWaveSolver) Close() {
 	if s.visibilityBuf != nil {
 		s.visibilityBuf.Release()
 		s.visibilityBuf = nil
+	}
+	if s.blockMaskBuf != nil {
+		s.blockMaskBuf.Release()
+		s.blockMaskBuf = nil
 	}
 	if s.wallMaskBuf != nil {
 		s.wallMaskBuf.Release()

@@ -8,6 +8,7 @@ type waveField struct {
 	prev          []float32
 	next          []float32
 	impulses      []waveImpulse
+	shiftScratch  []float32
 }
 
 type waveImpulse struct {
@@ -63,4 +64,54 @@ func (f *waveField) takeImpulses() []waveImpulse {
 	batch := f.impulses
 	f.impulses = f.impulses[:0]
 	return batch
+}
+
+func (f *waveField) reset() {
+	for i := range f.curr {
+		f.curr[i] = 0
+	}
+	for i := range f.prev {
+		f.prev[i] = 0
+	}
+	for i := range f.next {
+		f.next[i] = 0
+	}
+	f.impulses = f.impulses[:0]
+}
+
+func (f *waveField) shift(dx, dy int) {
+	if dx == 0 && dy == 0 {
+		return
+	}
+	if len(f.shiftScratch) != len(f.curr) {
+		f.shiftScratch = make([]float32, len(f.curr))
+	}
+	f.shiftBuffer(f.curr, dx, dy)
+	f.shiftBuffer(f.prev, dx, dy)
+	f.shiftBuffer(f.next, dx, dy)
+	f.impulses = f.impulses[:0]
+}
+
+func (f *waveField) shiftBuffer(buf []float32, dx, dy int) {
+	copy(f.shiftScratch, buf)
+	width, height := f.width, f.height
+	for y := 0; y < height; y++ {
+		srcY := y + dy
+		rowStart := y * width
+		if srcY < 0 || srcY >= height {
+			for x := 0; x < width; x++ {
+				buf[rowStart+x] = 0
+			}
+			continue
+		}
+		srcRowStart := srcY * width
+		for x := 0; x < width; x++ {
+			srcX := x + dx
+			if srcX < 0 || srcX >= width {
+				buf[rowStart+x] = 0
+				continue
+			}
+			buf[rowStart+x] = f.shiftScratch[srcRowStart+srcX]
+		}
+	}
 }

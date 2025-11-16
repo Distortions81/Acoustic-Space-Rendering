@@ -58,8 +58,10 @@ func (g *Game) trySetWall(x, y int) {
 	if x <= 1 || x >= w-1 || y <= 1 || y >= h-1 {
 		return
 	}
-	dx := float64(x) - g.ex
-	dy := float64(y) - g.ey
+	worldX := x + g.worldOriginX
+	worldY := y + g.worldOriginY
+	dx := float64(worldX) - g.ex
+	dy := float64(worldY) - g.ey
 	if dx*dx+dy*dy < float64(wallExclusionRadius*wallExclusionRadius) {
 		return
 	}
@@ -70,11 +72,13 @@ func (g *Game) trySetWall(x, y int) {
 
 // isWall reports whether the coordinates reference a wall cell.
 func (g *Game) isWall(x, y int) bool {
-	if x < 0 || x >= w || y < 0 || y >= h {
-		return true
+	lx := x - g.worldOriginX
+	ly := y - g.worldOriginY
+	if lx < 0 || lx >= w || ly < 0 || ly >= h {
+		return false
 	}
 	if len(g.walls) == 0 {
 		return false
 	}
-	return g.walls[y*w+x]
+	return g.walls[ly*w+lx]
 }
