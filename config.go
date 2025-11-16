@@ -6,11 +6,11 @@ import "time"
 // application. These values define the grid size and timing for
 // the acoustic wave simulation.
 const (
-	displayWidth                = 1920
-	displayHeight               = 1080
+	referenceWidth              = 1920
+	referenceHeight             = 1080
 	simulationResolutionDivisor = 2
 
-	w, h                   = displayWidth / simulationResolutionDivisor, displayHeight / simulationResolutionDivisor
+	w, h                   = referenceWidth / simulationResolutionDivisor, referenceHeight / simulationResolutionDivisor
 	windowScale            = 1
 	damp                   = 0.999
 	speed                  = 0.5
@@ -43,6 +43,8 @@ var (
 	viewportHeight = defaultViewportHeight
 	blockWidth     = defaultBlockWidth
 	blockHeight    = defaultBlockHeight
+	windowWidth    = referenceWidth
+	windowHeight   = referenceHeight
 )
 
 var boundaryReflect = defaultBoundaryReflect

@@ -20,6 +20,7 @@ type Game struct {
 
 	walls     []bool
 	levelRand *rand.Rand
+	levelData *levelDef
 
 	listenerForwardX float64
 	listenerForwardY float64
@@ -58,13 +59,19 @@ type Game struct {
 }
 
 // newGame constructs a fully initialized Game instance.
-func newGame() *Game {
+func newGame(level *levelDef) *Game {
+	startX := float64(w / 2)
+	startY := float64(h / 2)
+	if level != nil {
+		startX, startY = level.startPosition(w, h)
+	}
 	g := &Game{
 		field:                newWaveField(w, h),
-		ex:                   float64(w / 2),
-		ey:                   float64(h / 2),
+		ex:                   startX,
+		ey:                   startY,
 		levelRand:            rand.New(rand.NewSource(time.Now().UnixNano() + 1)),
 		walls:                make([]bool, w*h),
+		levelData:            level,
 		listenerForwardX:     0,
 		listenerForwardY:     -1,
 		autoWalkRand:         rand.New(rand.NewSource(time.Now().UnixNano() + 2)),

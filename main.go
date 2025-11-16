@@ -32,7 +32,12 @@ func main() {
 		defer stopProfile()
 	}
 
-	g := newGame()
+	levelData, err := loadLevel(*levelPathFlag)
+	if err != nil {
+		log.Printf("warning: unable to load level %q: %v; falling back to procedural layout", *levelPathFlag, err)
+		levelData = nil
+	}
+	g := newGame(levelData)
 	if *recordDefaultPGO {
 		g.enableAutoWalk(pgoRecordDuration)
 		go func(stop func()) {
@@ -44,7 +49,8 @@ func main() {
 		}(stopProfile)
 	}
 
-	ebiten.SetWindowSize(displayWidth*windowScale, displayHeight*windowScale)
+	ebiten.SetWindowResizable(true)
+	ebiten.SetWindowSize(windowWidth*windowScale, windowHeight*windowScale)
 	ebiten.SetWindowTitle("Acoustic Steps")
 	if err := ebiten.RunGame(g); err != nil {
 		panic(err)

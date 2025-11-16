@@ -18,6 +18,9 @@ var (
 	// recordDefaultPGO triggers a scripted walk to produce default.pgo.
 	recordDefaultPGO = flag.Bool("record-default-pgo", false, "walk randomly for 15s while capturing default.pgo")
 
+	// levelPathFlag loads level geometry from a JSON definition.
+	levelPathFlag = flag.String("level", "data/level1.json", "path to the JSON level definition")
+
 	// occludeLineOfSightFlag hides regions outside of the listener's line of
 	// sight while rendering.
 	occludeLineOfSightFlag = flag.Bool("occlude-line-of-sight", false, "hide regions that are not in the listener's line of sight when rendering")

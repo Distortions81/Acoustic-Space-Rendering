@@ -17,6 +17,10 @@ func (g *Game) generateWalls() {
 	if g.levelRand == nil {
 		g.levelRand = rand.New(rand.NewSource(time.Now().UnixNano() + 1))
 	}
+	if g.levelData != nil {
+		g.applyLevelWalls()
+		return
+	}
 	for s := 0; s < wallSegments; s++ {
 		lengthRange := wallMaxLen - wallMinLen + 1
 		if lengthRange <= 0 {
@@ -48,6 +52,23 @@ func (g *Game) generateWalls() {
 			cx += dx
 			cy += dy
 		}
+	}
+	g.lastVisCX, g.lastVisCY = -1, -1
+	g.wallsDirty = true
+}
+
+func (g *Game) applyLevelWalls() {
+	if g.levelData == nil || len(g.walls) != w*h {
+		return
+	}
+	g.levelData.fillWallMask(g.walls, w, h)
+	for idx, hasWall := range g.walls {
+		if !hasWall {
+			continue
+		}
+		x := idx % w
+		y := idx / w
+		g.field.zeroCell(x, y)
 	}
 	g.lastVisCX, g.lastVisCY = -1, -1
 	g.wallsDirty = true

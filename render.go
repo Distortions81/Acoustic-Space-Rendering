@@ -23,7 +23,9 @@ func (g *Game) Draw(screen *ebiten.Image) {
 	}
 	if g.simImage != nil && viewportWidth > 0 && viewportHeight > 0 {
 		opts := &ebiten.DrawImageOptions{}
-		opts.GeoM.Scale(float64(displayWidth)/float64(viewportWidth), float64(displayHeight)/float64(viewportHeight))
+		if viewportWidth > 0 && viewportHeight > 0 {
+			opts.GeoM.Scale(float64(windowWidth)/float64(viewportWidth), float64(windowHeight)/float64(viewportHeight))
+		}
 		opts.Filter = ebiten.FilterLinear
 		screen.DrawImage(g.simImage, opts)
 	}
@@ -50,7 +52,17 @@ func (g *Game) Draw(screen *ebiten.Image) {
 }
 
 // Layout reports the logical screen size used by Ebiten.
-func (g *Game) Layout(_, _ int) (int, int) { return displayWidth, displayHeight }
+func (g *Game) Layout(outsideWidth, outsideHeight int) (int, int) {
+	if outsideWidth <= 0 {
+		outsideWidth = referenceWidth
+	}
+	if outsideHeight <= 0 {
+		outsideHeight = referenceHeight
+	}
+	windowWidth = outsideWidth
+	windowHeight = outsideHeight
+	return outsideWidth, outsideHeight
+}
 
 func (g *Game) viewportPixels(world []byte) []byte {
 	if viewportWidth <= 0 || viewportHeight <= 0 {
@@ -110,8 +122,8 @@ func (g *Game) drawEmitterIndicator(screen *ebiten.Image) {
 		return
 	}
 	red := color.RGBA{255, 0, 0, 255}
-	centerX := float64(displayWidth) / 2
-	centerY := float64(displayHeight) / 2
+	centerX := float64(windowWidth) / 2
+	centerY := float64(windowHeight) / 2
 	size := 3.0
 	offset := size / 2
 	ebitenutil.DrawRect(screen, centerX-offset, centerY-offset, size, size, red)
@@ -121,8 +133,8 @@ func (g *Game) drawWallsOverlay(screen *ebiten.Image) {
 	if !*showWallsFlag || viewportWidth <= 0 || viewportHeight <= 0 || screen == nil || len(g.walls) != w*h {
 		return
 	}
-	scaleX := float64(displayWidth) / float64(viewportWidth)
-	scaleY := float64(displayHeight) / float64(viewportHeight)
+	scaleX := float64(windowWidth) / float64(viewportWidth)
+	scaleY := float64(windowHeight) / float64(viewportHeight)
 	wallColor := color.RGBA{30, 40, 80, 255}
 	startX := g.viewX
 	startY := g.viewY

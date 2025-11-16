@@ -1,0 +1,97 @@
+{
+  "version": 1,
+  "level": {
+    "name": "Abandoned Sanitarium — Sublevel A (Wall-Only Schema)",
+    "size": { "width": 64, "height": 48 },
+
+    "coord_system": {
+      "origin": "top-left",
+      "x_axis": "right",
+      "y_axis": "down",
+      "unit": "tile"
+    },
+
+    "player_start": { "x": 32, "y": 44 },
+    "exit": { "x": 32, "y": 4 },
+
+    "walls": [
+      { "x": 0,  "y": 0,  "w": 64, "h": 1 },
+      { "x": 0,  "y": 47, "w": 18, "h": 1 },
+      { "x": 46, "y": 47, "w": 18, "h": 1 },
+      { "x": 0,  "y": 0,  "w": 1,  "h": 48 },
+      { "x": 63, "y": 0,  "w": 1,  "h": 48 },
+
+      { "x": 26, "y": 40, "w": 1,  "h": 7 },
+      { "x": 38, "y": 40, "w": 1,  "h": 7 },
+
+      { "x": 22, "y": 32, "w": 1,  "h": 8 },
+      { "x": 42, "y": 32, "w": 1,  "h": 8 },
+      { "x": 22, "y": 32, "w": 8,  "h": 1 },
+      { "x": 34, "y": 32, "w": 8,  "h": 1 },
+      { "x": 22, "y": 40, "w": 4,  "h": 1 },
+      { "x": 38, "y": 40, "w": 4,  "h": 1 },
+
+      { "x": 10, "y": 12, "w": 20, "h": 1 },
+      { "x": 34, "y": 12, "w": 20, "h": 1 },
+      { "x": 10, "y": 32, "w": 12, "h": 1 },
+      { "x": 22, "y": 32, "w": 8,  "h": 1 },
+      { "x": 34, "y": 32, "w": 8,  "h": 1 },
+      { "x": 42, "y": 32, "w": 12, "h": 1 },
+      { "x": 10, "y": 12, "w": 1,  "h": 8 },
+      { "x": 10, "y": 24, "w": 1,  "h": 8 },
+      { "x": 53, "y": 12, "w": 1,  "h": 10 },
+      { "x": 53, "y": 26, "w": 1,  "h": 6 },
+
+      { "x": 30, "y": 6, "w": 1,  "h": 6 },
+      { "x": 34, "y": 6, "w": 1,  "h": 6 },
+
+      { "x": 22, "y": 1,  "w": 1,  "h": 11 },
+      { "x": 42, "y": 1,  "w": 1,  "h": 11 },
+      { "x": 22, "y": 1,  "w": 20, "h": 1 },
+
+      { "x": 1,  "y": 16, "w": 9,  "h": 1 },
+      { "x": 1,  "y": 32, "w": 9,  "h": 1 },
+      { "x": 1,  "y": 16, "w": 1,  "h": 16 },
+      { "x": 10, "y": 16, "w": 1,  "h": 4 },
+      { "x": 10, "y": 24, "w": 1,  "h": 8 },
+
+      { "x": 54, "y": 18, "w": 9,  "h": 1 },
+      { "x": 54, "y": 34, "w": 9,  "h": 1 },
+      { "x": 63, "y": 18, "w": 1,  "h": 16 },
+      { "x": 54, "y": 18, "w": 1,  "h": 4 },
+      { "x": 54, "y": 26, "w": 1,  "h": 8 }
+    ],
+
+    "lights": [
+      { "x": 32, "y": 36, "radius": 10, "intensity": 0.8, "type": "flicker" },
+      { "x": 32, "y": 22, "radius": 14, "intensity": 0.5, "type": "pulse" },
+      { "x": 32, "y": 6,  "radius": 12, "intensity": 0.6, "type": "steady" },
+      { "x": 58, "y": 26, "radius": 9,  "intensity": 0.7, "type": "buzz" }
+    ],
+
+    "points_of_interest": [
+      { "x": 28, "y": 38, "desc": "Blood trail toward hub." },
+      { "x": 32, "y": 6,  "desc": "Chalk ritual circle center." },
+      { "x": 4,  "y": 24, "desc": "Rattling morgue lockers." },
+      { "x": 58, "y": 30, "desc": "Generator control switch." }
+    ],
+
+    "triggers": [
+      {
+        "type": "area",
+        "bounds": { "x": 26, "y": 42, "w": 12, "h": 3 },
+        "on_enter": ["play_sound:metal_crash", "spawn_enemy:shambler"]
+      },
+      {
+        "type": "area",
+        "bounds": { "x": 30, "y": 4, "w": 4, "h": 4 },
+        "on_enter": ["dim_lights:0.3", "play_sound:whispers", "spawn_enemy:apparition"]
+      },
+      {
+        "type": "interact",
+        "point": { "x": 58, "y": 30 },
+        "on_use": ["toggle_power", "flicker_lights"]
+      }
+    ]
+  }
+}
