@@ -2,6 +2,9 @@
 
 This project uses [Ebiten](https://ebiten.org/) for graphics and an OpenCL-backed simulation. OpenCL is now required; follow the steps below to install the necessary Ubuntu packages and build the application. No build tags are needed.
 
+For a deeper look at how the simulation is structured internally, see
+`details.md`.
+
 ## Demo
 
 ![Acoustic Space Rendering screenshot](screenshot.png)
