@@ -15,6 +15,7 @@ type levelFile struct {
 type levelDef struct {
 	Name        string      `json:"name"`
 	Size        levelSize   `json:"size"`
+	Spawn       *levelPoint `json:"spawn"`
 	PlayerStart levelPoint  `json:"player_start"`
 	Exit        levelPoint  `json:"exit"`
 	Walls       []levelRect `json:"walls"`
@@ -57,8 +58,12 @@ func (l *levelDef) startPosition(width, height int) (float64, float64) {
 	if l == nil || width <= 0 || height <= 0 {
 		return float64(width) / 2, float64(height) / 2
 	}
-	x := scaleToGrid(float64(l.PlayerStart.X), float64(l.Size.Width), float64(width))
-	y := scaleToGrid(float64(l.PlayerStart.Y), float64(l.Size.Height), float64(height))
+	src := l.PlayerStart
+	if l.Spawn != nil {
+		src = *l.Spawn
+	}
+	x := scaleToGrid(float64(clampInt(src.X, 0, l.Size.Width)), float64(l.Size.Width), float64(width))
+	y := scaleToGrid(float64(clampInt(src.Y, 0, l.Size.Height)), float64(l.Size.Height), float64(height))
 	return x, y
 }
 
@@ -123,4 +128,14 @@ func scaleRange(start, length, srcSize, dstSize int) (int, int) {
 		}
 	}
 	return startIdx, endIdx - startIdx
+}
+
+func clampInt(value, minVal, maxVal int) int {
+	if value < minVal {
+		return minVal
+	}
+	if value > maxVal {
+		return maxVal
+	}
+	return value
 }

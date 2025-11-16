@@ -82,6 +82,7 @@ Customize simulation behavior with additional flags:
 - `-prefer-fp16=<true|false>` — toggles 16-bit OpenCL wave buffers when the GPU advertises `cl_khr_fp16`/`cl_khr_half_float`. Leave enabled to reduce bandwidth on capable devices; set to `false` to force 32-bit floats.
 - `-viewport-width=<value>`/`-viewport-height=<value>` — define the logical viewport that follows the listener so only a portion of the world is rendered and simulated at a time; defaults match the full grid.
 - `-block-width=<value>`/`-block-height=<value>` — split the world into blocks of the given size and only update blocks that intersect the viewport (defaults are `128` cells in each direction).
+- Pressing `Tab` toggles a zoomed-out level map overlay that shows the full wall layout and player marker to help orient larger levels.
 
 The simulation now treats the visible buffer as a rolling window over a much larger world, so moving the listener clears and refills the locally simulated chunks instead of being stopped by the grid boundaries. Tuning `-viewport-*` and `-block-*` keeps the actively simulated area as small as you need for performance.
 

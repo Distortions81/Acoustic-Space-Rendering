@@ -99,6 +99,12 @@ func (g *Game) handleDebugControls() {
 	}
 }
 
+func (g *Game) handleMapToggle() {
+	if inpututil.IsKeyJustPressed(ebiten.KeyTab) {
+		g.showLevelMap = !g.showLevelMap
+	}
+}
+
 // adjustSimMultiplier clamps the simulation batch size delta within bounds.
 func (g *Game) adjustSimMultiplier(delta int) {
 	g.simStepMultiplier += delta

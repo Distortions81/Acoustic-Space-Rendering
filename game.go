@@ -55,6 +55,7 @@ type Game struct {
 
 	worldOriginX int
 	worldOriginY int
+	showLevelMap bool
 	renderState
 }
 
@@ -97,6 +98,7 @@ func newGame(level *levelDef) *Game {
 
 // Update advances the simulation, produces optional audio, and refreshes visibility data.
 func (g *Game) Update() error {
+	g.handleMapToggle()
 	dx, dy := g.movementVector()
 	oldX, oldY := g.ex, g.ey
 	g.ex += dx
