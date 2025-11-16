@@ -54,6 +54,7 @@ type Game struct {
 
 	worldOriginX int
 	worldOriginY int
+	renderState
 }
 
 // newGame constructs a fully initialized Game instance.
@@ -151,7 +152,7 @@ func (g *Game) Update() error {
 		visibleGen = g.visibleGen
 	}
 	maskDirty := g.blockMaskNeedsUpload
-	if err := g.gpuSolver.Step(g.field, g.walls, steps, g.wallsDirty, *showWallsFlag, *occludeLineOfSightFlag, visibleStamp, visibleGen, g.blockMask, maskDirty); err != nil {
+	if err := g.gpuSolver.Step(g.field, g.walls, steps, g.wallsDirty, false, *occludeLineOfSightFlag, visibleStamp, visibleGen, g.blockMask, maskDirty); err != nil {
 		return err
 	}
 	if maskDirty {

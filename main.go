@@ -44,7 +44,7 @@ func main() {
 		}(stopProfile)
 	}
 
-	ebiten.SetWindowSize(viewportWidth*windowScale, viewportHeight*windowScale)
+	ebiten.SetWindowSize(displayWidth*windowScale, displayHeight*windowScale)
 	ebiten.SetWindowTitle("Acoustic Steps")
 	if err := ebiten.RunGame(g); err != nil {
 		panic(err)
