@@ -22,10 +22,7 @@ func metersToCells(distanceM float64) int {
 }
 
 func wallHalfThicknessCells() int {
-	thicknessM := defaultWallThicknessM
-	if wallThicknessMFlag != nil {
-		thicknessM = *wallThicknessMFlag
-	}
+	thicknessM := roomWallThicknessM
 	if thicknessM < 0 {
 		thicknessM = 0
 	}
@@ -40,10 +37,7 @@ func wallHalfThicknessCells() int {
 }
 
 func wallHalfThicknessJitterCells() int {
-	jitterM := defaultWallThicknessJitM
-	if wallThicknessJitterMFlag != nil {
-		jitterM = *wallThicknessJitterMFlag
-	}
+	jitterM := roomWallThicknessJitM
 	if jitterM <= 0 {
 		return 0
 	}
@@ -71,18 +65,9 @@ func (g *Game) generateWalls() {
 		g.levelRand = rand.New(rand.NewSource(time.Now().UnixNano() + 1))
 	}
 
-	segments := defaultWallSegments
-	if wallSegmentsFlag != nil && *wallSegmentsFlag > 0 {
-		segments = *wallSegmentsFlag
-	}
-	minLenM := defaultWallMinLenM
-	if wallMinLenMFlag != nil {
-		minLenM = *wallMinLenMFlag
-	}
-	maxLenM := defaultWallMaxLenM
-	if wallMaxLenMFlag != nil {
-		maxLenM = *wallMaxLenMFlag
-	}
+	segments := roomWallSegments
+	minLenM := roomWallMinLenM
+	maxLenM := roomWallMaxLenM
 	minLenCells := metersToCells(minLenM)
 	maxLenCells := metersToCells(maxLenM)
 	if minLenCells < 1 {
@@ -138,10 +123,7 @@ func (g *Game) trySetWall(x, y int) {
 	if x <= 1 || x >= w-1 || y <= 1 || y >= h-1 {
 		return
 	}
-	exclusionM := defaultWallExclusionM
-	if wallExclusionRadiusMFlag != nil {
-		exclusionM = *wallExclusionRadiusMFlag
-	}
+	exclusionM := roomWallExclusionM
 	if exclusionM < 0 {
 		exclusionM = 0
 	}

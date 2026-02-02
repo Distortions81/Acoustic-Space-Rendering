@@ -42,8 +42,9 @@ func (g *Game) Draw(screen *ebiten.Image) {
 		}
 		simMS := g.lastSimDuration.Seconds() * 1000
 		simSteps := g.simStepsPerSecond()
-		debugMsg := fmt.Sprintf("FPS: %.1f\nSim speed: %.2fx (%.1f TPS)\nSim steps: %.1f/s (mult %dx, +/-)\nControl: %s (Tab)\nSim: %.2f ms",
-			fps, simMultiplier, tps, simSteps, g.simStepMultiplier, g.controlModeLabel(), simMS)
+		worldWidthFeet := float64(w) * cellSizeMeters() * 3.28084
+		debugMsg := fmt.Sprintf("FPS: %.1f\nSim speed: %.2fx (%.1f TPS)\nSim steps: %.1f/s (mult %dx, +/-)\nWorld: %.1f ft\nControl: %s (Tab)\nSim: %.2f ms",
+			fps, simMultiplier, tps, simSteps, g.simStepMultiplier, worldWidthFeet, g.controlModeLabel(), simMS)
 		ebitenutil.DebugPrint(screen, debugMsg)
 	}
 }

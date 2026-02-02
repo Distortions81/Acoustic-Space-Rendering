@@ -9,11 +9,11 @@ var (
 	// showWallsFlag toggles rendering of wall geometry overlays.
 	showWallsFlag = flag.Bool("show-walls", true, "render wall geometry overlays")
 
-	// wallReflectFlag adjusts how strongly the simulation boundaries reflect waves.
-	wallReflectFlag = flag.Float64("wall-reflect", defaultBoundaryReflect, "reflection coefficient for map boundaries (0-1)")
+	// worldBoundaryReflectFlag adjusts how strongly the outer boundary reflects waves.
+	worldBoundaryReflectFlag = flag.Float64("world-boundary-reflect", defaultBoundaryReflect, "amplitude reflection coefficient for the world boundary (0-1); used when -world-boundary-absorb=false")
 
-	// absorbEdgesFlag forces the outer boundary to be absorbing (no reflection).
-	absorbEdgesFlag = flag.Bool("absorb-edges", true, "treat the outer boundary as absorbing (overrides -wall-reflect when true)")
+	// worldBoundaryAbsorbFlag forces the outer boundary to be absorbing (no reflection).
+	worldBoundaryAbsorbFlag = flag.Bool("world-boundary-absorb", true, "treat the world boundary as absorbing (overrides world boundary reflection when true)")
 
 	// preferFP16Flag enables 16-bit wave buffers on devices that support half precision.
 	preferFP16Flag = flag.Bool("prefer-fp16", false, "use 16-bit floats for the OpenCL solver when supported")
@@ -40,7 +40,7 @@ var (
 	enableAudioFlag = flag.Bool("enable-audio", true, "enable experimental audio output from center samples")
 
 	// audioLoopFlag lets the user provide a WAV file that will loop instead of the impulse samples.
-	audioLoopFlag = flag.String("audio-loop", "test2.wav", "path to a WAV file to loop when audio output is enabled")
+	audioLoopFlag = flag.String("audio-loop", "test.wav", "path to a WAV file to loop when audio output is enabled")
 
 	// disableWalkingPulsesFlag suppresses the walking-generated pressure pulses.
 	disableWalkingPulsesFlag = flag.Bool("disable-walking-pulses", true, "prevent movement from queuing impulses into the wave field")
@@ -69,11 +69,11 @@ var (
 	// walkSpeedMPSFlag sets the listener walking speed used when converting movement to grid cells.
 	walkSpeedMPSFlag = flag.Float64("walk-speed-mps", defaultWalkSpeedMPS, "listener walking speed in meters/second used when holding Shift")
 
-	// Wall generation parameters (converted from meters to cells using -cell-size-m).
-	wallSegmentsFlag         = flag.Int("wall-segments", defaultWallSegments, "number of random wall segments to generate")
-	wallMinLenMFlag          = flag.Float64("wall-min-len-m", defaultWallMinLenM, "minimum wall segment length in meters")
-	wallMaxLenMFlag          = flag.Float64("wall-max-len-m", defaultWallMaxLenM, "maximum wall segment length in meters")
-	wallThicknessMFlag       = flag.Float64("wall-thickness-m", defaultWallThicknessM, "approximate wall thickness in meters")
-	wallThicknessJitterMFlag = flag.Float64("wall-thickness-jitter-m", defaultWallThicknessJitM, "random wall thickness variation in meters")
-	wallExclusionRadiusMFlag = flag.Float64("wall-exclusion-radius-m", defaultWallExclusionM, "minimum distance from listener to place walls (meters)")
+	// Room wall generation parameters (converted from meters to cells using -cell-size-m).
+	roomWallSegmentsFlag         = flag.Int("room-wall-segments", defaultWallSegments, "number of random room wall segments to generate")
+	roomWallMinLenMFlag          = flag.Float64("room-wall-min-len-m", defaultWallMinLenM, "minimum room wall segment length in meters")
+	roomWallMaxLenMFlag          = flag.Float64("room-wall-max-len-m", defaultWallMaxLenM, "maximum room wall segment length in meters")
+	roomWallThicknessMFlag       = flag.Float64("room-wall-thickness-m", defaultWallThicknessM, "approximate room wall thickness in meters")
+	roomWallThicknessJitterMFlag = flag.Float64("room-wall-thickness-jitter-m", defaultWallThicknessJitM, "random room wall thickness variation in meters")
+	roomWallExclusionRadiusMFlag = flag.Float64("room-wall-exclusion-radius-m", defaultWallExclusionM, "minimum distance from listener to place room walls (meters)")
 )

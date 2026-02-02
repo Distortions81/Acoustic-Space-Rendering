@@ -38,3 +38,12 @@ const (
 )
 
 var boundaryReflect = defaultBoundaryReflect
+
+var (
+	roomWallSegments      = defaultWallSegments
+	roomWallMinLenM       = defaultWallMinLenM
+	roomWallMaxLenM       = defaultWallMaxLenM
+	roomWallThicknessM    = defaultWallThicknessM
+	roomWallThicknessJitM = defaultWallThicknessJitM
+	roomWallExclusionM    = defaultWallExclusionM
+)

@@ -122,9 +122,9 @@ main files and functions in the repository.
   - It clears any previous wall state.
   - It randomly chooses segment positions, orientations, lengths, and
     thicknesses based on runtime flags:
-    - `-wall-segments` controls how many segments are generated.
-    - `-wall-min-len-m` / `-wall-max-len-m` define segment lengths in meters.
-    - `-wall-thickness-m` / `-wall-thickness-jitter-m` define thickness in meters.
+    - `-room-wall-segments` controls how many segments are generated.
+    - `-room-wall-min-len-m` / `-room-wall-max-len-m` define segment lengths in meters.
+    - `-room-wall-thickness-m` / `-room-wall-thickness-jitter-m` define thickness in meters.
     - These meter values are converted to cell units using `-cell-size-m`.
   - For each segment, it calls `trySetWall` to mark grid cells as walls.
 - `trySetWall` enforces:
@@ -150,10 +150,10 @@ main files and functions in the repository.
   - For left and right columns, it does the same horizontally.
   - In all cases, the copied value is multiplied by a `reflect` coefficient
     so the reflection can be made weaker or stronger.
-- `boundaryReflect` in `config.go` holds the default reflection coefficient.
-  - In `main.go`, the `-wall-reflect` flag is parsed and clamped to the
-    `[0, 1]` range before being stored back into `boundaryReflect`.
-  - When `-absorb-edges=true` (the default), `main.go` overrides
+- `boundaryReflect` in `config.go` holds the configured reflection coefficient.
+  - In `main.go`, `-world-boundary-absorb` and `-world-boundary-reflect` are
+    parsed and applied (with deprecated aliases supported).
+  - When `-world-boundary-absorb=true` (the default), `main.go` overrides
     `boundaryReflect` to `0`, making the outer boundary absorbing.
 - After each call to `wave_step`, `openCLWaveSolver.runBoundaryAccumulate`
   runs `boundary_accumulate`:

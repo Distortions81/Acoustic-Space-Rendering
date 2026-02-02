@@ -79,8 +79,8 @@ go run .
 
 Customize simulation behavior with additional flags:
 
-- `-wall-reflect=<value>` — sets how strongly the outer walls reflect waves. Use a value between 0 (fully absorbing) and 1 (perfect reflection); the default is `0.98`.
-- `-absorb-edges=<true|false>` — when `true`, force the outer boundary to be absorbing (no reflection), overriding `-wall-reflect` (default `true`).
+- `-world-boundary-reflect=<value>` — amplitude reflection coefficient for the outer world boundary (0–1), used when `-world-boundary-absorb=false`; default is `0.98`.
+- `-world-boundary-absorb=<true|false>` — when `true`, force the world boundary to be absorbing (no reflection), overriding `-world-boundary-reflect` (default `true`).
 - `-emitter-gain=<value>` — scales `-audio-loop` samples before they are injected into the wave field (default `0.25`).
 - `-air-abs-dbpm=<value>` — approximate air absorption in dB per meter (amplitude), applied as extra per-step damping (default `0.01`).
 - `-cell-size-m=<value>` — sets the physical size of one grid cell in meters; used to compute solver coefficients from real-world units (default `0.025`).
@@ -88,12 +88,12 @@ Customize simulation behavior with additional flags:
 - `-rt60-s=<value>` — sets an approximate RT60 decay time in seconds; used to compute per-step damping (`<=0` disables damping; default `1.2`).
 - `-run-speed-mps=<value>` — sets listener running speed in meters/second; used for WASD/autowalk movement (default `3.0`).
 - `-walk-speed-mps=<value>` — sets listener walking speed in meters/second while holding Shift (default `1.4`).
-- `-wall-segments=<value>` — number of random wall segments to generate (default `20`).
-- `-wall-min-len-m=<value>` — minimum wall segment length in meters (default `1.0`).
-- `-wall-max-len-m=<value>` — maximum wall segment length in meters (default `12.0`).
-- `-wall-thickness-m=<value>` — approximate wall thickness in meters (default `0.15`).
-- `-wall-thickness-jitter-m=<value>` — random wall thickness variation in meters (default `0.10`).
-- `-wall-exclusion-radius-m=<value>` — minimum distance from the listener to place walls, in meters (default `0.5`).
+- `-room-wall-segments=<value>` — number of random interior “room wall” segments to generate (default `20`).
+- `-room-wall-min-len-m=<value>` — minimum room wall segment length in meters (default `1.0`).
+- `-room-wall-max-len-m=<value>` — maximum room wall segment length in meters (default `12.0`).
+- `-room-wall-thickness-m=<value>` — approximate room wall thickness in meters (default `0.15`).
+- `-room-wall-thickness-jitter-m=<value>` — random room wall thickness variation in meters (default `0.10`).
+- `-room-wall-exclusion-radius-m=<value>` — minimum distance from the listener to place room walls, in meters (default `0.5`).
 - `-prefer-fp16=<true|false>` — toggles 16-bit OpenCL wave buffers when the GPU advertises `cl_khr_fp16`/`cl_khr_half_float`. Leave enabled to reduce bandwidth on capable devices; set to `false` to force 32-bit floats.
 - `-enable-audio=<true|false>` — toggles experimental audio output driven by the simulator’s center samples; enable it to hear the impulse stream.
 - `-audio-loop=<path>` — when audio is enabled, specify a WAV file (RIFF/PCM) that is resampled to 44.1 kHz and used to drive the emitter’s pressure waveform; audio output still comes from the simulator’s center sample stream.

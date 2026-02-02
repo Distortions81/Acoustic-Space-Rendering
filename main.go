@@ -12,15 +12,40 @@ import (
 // main configures the runtime, optionally records a profile, and launches Ebiten.
 func main() {
 	flag.Parse()
-	if absorbEdgesFlag != nil && *absorbEdgesFlag {
+	if worldBoundaryAbsorbFlag != nil && *worldBoundaryAbsorbFlag {
 		boundaryReflect = 0
 	} else {
-		boundaryReflect = *wallReflectFlag
+		boundaryReflect = *worldBoundaryReflectFlag
 	}
 	if boundaryReflect < 0 {
 		boundaryReflect = 0
 	} else if boundaryReflect > 1 {
 		boundaryReflect = 1
+	}
+
+	roomWallSegments = defaultWallSegments
+	if roomWallSegmentsFlag != nil {
+		roomWallSegments = *roomWallSegmentsFlag
+	}
+	roomWallMinLenM = defaultWallMinLenM
+	if roomWallMinLenMFlag != nil {
+		roomWallMinLenM = *roomWallMinLenMFlag
+	}
+	roomWallMaxLenM = defaultWallMaxLenM
+	if roomWallMaxLenMFlag != nil {
+		roomWallMaxLenM = *roomWallMaxLenMFlag
+	}
+	roomWallThicknessM = defaultWallThicknessM
+	if roomWallThicknessMFlag != nil {
+		roomWallThicknessM = *roomWallThicknessMFlag
+	}
+	roomWallThicknessJitM = defaultWallThicknessJitM
+	if roomWallThicknessJitterMFlag != nil {
+		roomWallThicknessJitM = *roomWallThicknessJitterMFlag
+	}
+	roomWallExclusionM = defaultWallExclusionM
+	if roomWallExclusionRadiusMFlag != nil {
+		roomWallExclusionM = *roomWallExclusionRadiusMFlag
 	}
 	var stopProfile func()
 	if *recordDefaultPGO {

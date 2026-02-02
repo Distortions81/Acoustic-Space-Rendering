@@ -4,3 +4,10 @@
 - Keep package names and commands tailored to Ubuntu LTS releases unless otherwise noted.
 - When listing installation commands, group related packages on the same `apt` line and include a short description of what the packages provide.
 - Cross-reference the README when adding or modifying dependency instructions so the guidance stays consistent across files.
+
+## Prototype flag naming
+
+This repo is a prototype; we do not keep legacy flag aliases for compatibility.
+
+- Use `world-*` for world boundary (screen edge) behavior, e.g. `-world-boundary-absorb` / `-world-boundary-reflect`.
+- Use `room-wall-*` for interior “room walls” generation parameters.
