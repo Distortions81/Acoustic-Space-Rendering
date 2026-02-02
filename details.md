@@ -139,8 +139,9 @@ main files and functions in the repository.
   - `openCLWaveSolver.refreshWallMask` uploads this mask as needed.
   - In the `wave_step` kernel, any cell with `wall_mask[idx]` set is treated
     as solid. Neighboring fluid cells treat wall-adjacent samples as
-    reflective boundaries (controlled by `-room-wall-reflect`) when computing
-    the Laplacian, producing room-wall reflections instead of “holes”.
+    reflective boundaries (controlled by `-room-wall-material` and
+    `-room-wall-reflect`) when computing the Laplacian, producing room-wall
+    reflections instead of “holes”.
 
 ### Outer Grid Boundaries
 

@@ -90,5 +90,6 @@ var (
 	roomWallThicknessMFlag       = flag.Float64("room-wall-thickness-m", defaultWallThicknessM, "approximate room wall thickness in meters")
 	roomWallThicknessJitterMFlag = flag.Float64("room-wall-thickness-jitter-m", defaultWallThicknessJitM, "random room wall thickness variation in meters")
 	roomWallExclusionRadiusMFlag = flag.Float64("room-wall-exclusion-radius-m", defaultWallExclusionM, "minimum distance from listener to place room walls (meters)")
+	roomWallMaterialFlag         = flag.String("room-wall-material", defaultRoomWallMaterial, "room wall material preset: drywall, concrete, brick, glass, wood, curtain, acoustic")
 	roomWallReflectFlag          = flag.Float64("room-wall-reflect", defaultRoomWallReflect, "amplitude reflection coefficient at room wall surfaces (0-1)")
 )

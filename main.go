@@ -4,6 +4,7 @@ import (
 	"flag"
 	"log"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/hajimehoshi/ebiten/v2"
@@ -12,6 +13,10 @@ import (
 // main configures the runtime, optionally records a profile, and launches Ebiten.
 func main() {
 	flag.Parse()
+	set := map[string]bool{}
+	flag.CommandLine.Visit(func(f *flag.Flag) {
+		set[f.Name] = true
+	})
 	if worldBoundaryAbsorbFlag != nil && *worldBoundaryAbsorbFlag {
 		worldBoundaryReflect = 0
 	} else {
@@ -48,7 +53,15 @@ func main() {
 		roomWallExclusionM = *roomWallExclusionRadiusMFlag
 	}
 	roomWallReflect = defaultRoomWallReflect
-	if roomWallReflectFlag != nil {
+	material := defaultRoomWallMaterial
+	if roomWallMaterialFlag != nil {
+		material = strings.ToLower(strings.TrimSpace(*roomWallMaterialFlag))
+	}
+	if coeff, ok := roomWallMaterialReflectivity(material); ok {
+		roomWallReflect = coeff
+	}
+	// Manual numeric override takes precedence when explicitly provided.
+	if set["room-wall-reflect"] && roomWallReflectFlag != nil {
 		roomWallReflect = *roomWallReflectFlag
 	}
 	if roomWallReflect < 0 {
@@ -82,5 +95,26 @@ func main() {
 	ebiten.SetWindowTitle("Acoustic Steps")
 	if err := ebiten.RunGame(g); err != nil {
 		panic(err)
+	}
+}
+
+func roomWallMaterialReflectivity(material string) (float64, bool) {
+	switch material {
+	case "", "drywall", "plaster":
+		return 0.96, true
+	case "concrete":
+		return 0.98, true
+	case "brick":
+		return 0.97, true
+	case "glass":
+		return 0.98, true
+	case "wood", "panel", "paneling":
+		return 0.93, true
+	case "curtain", "drape":
+		return 0.75, true
+	case "acoustic", "foam", "tile":
+		return 0.55, true
+	default:
+		return 0, false
 	}
 }
