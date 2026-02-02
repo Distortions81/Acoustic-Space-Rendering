@@ -163,6 +163,12 @@ func (g *Game) isWall(x, y int) bool {
 
 // earOffsets computes the ear indicator positions relative to the listener.
 func (g *Game) earOffsets() (int, int) {
+	// Convert desired ear spacing (meters) into a half-offset in grid cells.
+	earHalfSpacingM := 0.5 * defaultEarSpacingM
+	earOffsetCells := int(math.Round(earHalfSpacingM / cellSizeMeters()))
+	if earOffsetCells < 1 {
+		earOffsetCells = 1
+	}
 	fx, fy := g.listenerForwardX, g.listenerForwardY
 	if fx == 0 && fy == 0 {
 		fy = -1

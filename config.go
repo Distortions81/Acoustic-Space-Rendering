@@ -8,7 +8,7 @@ import "time"
 const (
 	w, h                     = 640, 640
 	windowScale              = 2
-	defaultWorldWidthFeet    = 100
+	defaultWorldWidthFeet    = 50
 	defaultCellSizeM         = defaultWorldWidthFeet * 0.3048 / float64(w)
 	defaultAirTempC          = 20.0
 	defaultRT60Seconds       = 1.2
@@ -22,7 +22,7 @@ const (
 	simMultiplierStep        = 10
 	minSimMultiplier         = 1
 	maxSimMultiplier         = 1000
-	earOffsetCells           = 5
+	defaultEarSpacingM       = 0.18
 	defaultBoundaryReflect   = 0.98
 	defaultAirAbsDbPerM      = 0.01
 	visualGamma              = 1.0
