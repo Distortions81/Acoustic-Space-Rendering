@@ -38,7 +38,7 @@ var (
 	audioBufferMSFlag = flag.Int("audio-buffer-ms", defaultAudioBufferMS, "audio output buffer size in milliseconds")
 
 	// audioLoopFlag lets the user provide a WAV file that will loop instead of the impulse samples.
-	audioLoopFlag = flag.String("audio-loop", "test2.wav", "path to a WAV file to loop when audio output is enabled")
+	audioLoopFlag = flag.String("audio-loop", "speech.wav", "path to a WAV file to loop when audio output is enabled")
 
 	// emitterGainFlag scales the audio-loop-driven emitter samples before they are injected into the field.
 	emitterGainFlag = flag.Float64("emitter-gain", defaultEmitterGain, "gain applied to audio-loop emitter samples before injection")
@@ -73,5 +73,5 @@ var (
 	roomWallThicknessJitterMFlag = flag.Float64("room-wall-thickness-jitter-m", defaultWallThicknessJitM, "random room wall thickness variation in meters")
 	roomWallExclusionRadiusMFlag = flag.Float64("room-wall-exclusion-radius-m", defaultWallExclusionM, "minimum distance from listener to place room walls (meters)")
 	roomWallMaterialFlag         = flag.String("room-wall-material", defaultRoomWallMaterial, "room wall material preset: drywall, concrete, brick, glass, wood, curtain, acoustic")
-	roomWallReflectFlag = flag.Float64("room-wall-reflect", defaultRoomWallReflect, "amplitude reflection coefficient at room wall surfaces (0-1)")
+	roomWallReflectFlag          = flag.Float64("room-wall-reflect", defaultRoomWallReflect, "amplitude reflection coefficient at room wall surfaces (0-1)")
 )
