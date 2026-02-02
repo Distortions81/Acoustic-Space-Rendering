@@ -59,6 +59,7 @@ type Game struct {
 
 	lastUpdateTime time.Time
 	lastUpdateDT   float64
+	wallClockAvg   wallClockAverager
 }
 
 const minEmitterStartDistancePixels = 128
@@ -75,6 +76,11 @@ func newGame() *Game {
 		listenerForwardY:  -1,
 		autoWalkRand:      rand.New(rand.NewSource(time.Now().UnixNano() + 2)),
 		simStepMultiplier: defaultSimMultiplier,
+	}
+	if wallClockAvgFramesFlag != nil {
+		g.wallClockAvg.Init(*wallClockAvgFramesFlag)
+	} else {
+		g.wallClockAvg.Init(defaultWallClockAvgFrames)
 	}
 	if solver, err := newOpenCLWaveSolver(w, h); err != nil {
 		log.Fatalf("OpenCL initialization failed: %v", err)
@@ -178,18 +184,19 @@ func (g *Game) randomizeEmitterStart(minDist int) {
 // Update advances the simulation, produces optional audio, and refreshes visibility data.
 func (g *Game) Update() error {
 	now := time.Now()
+	dt := 1.0 / defaultTPS
 	if g.lastUpdateTime.IsZero() {
-		g.lastUpdateDT = 1.0 / defaultTPS
+		dt = 1.0 / defaultTPS
 	} else {
-		dt := now.Sub(g.lastUpdateTime).Seconds()
+		dt = now.Sub(g.lastUpdateTime).Seconds()
 		// Clamp to keep the simulation from exploding after stalls.
 		if dt < 0 {
 			dt = 0
 		} else if dt > 0.1 {
 			dt = 0.1
 		}
-		g.lastUpdateDT = dt
 	}
+	g.lastUpdateDT = g.wallClockAvg.Add(dt)
 	g.lastUpdateTime = now
 
 	g.handleControlToggle()

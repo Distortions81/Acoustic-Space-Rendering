@@ -99,4 +99,7 @@ var (
 	roomWallExclusionRadiusMFlag = flag.Float64("room-wall-exclusion-radius-m", defaultWallExclusionM, "minimum distance from listener to place room walls (meters)")
 	roomWallMaterialFlag         = flag.String("room-wall-material", defaultRoomWallMaterial, "room wall material preset: drywall, concrete, brick, glass, wood, curtain, acoustic")
 	roomWallReflectFlag          = flag.Float64("room-wall-reflect", defaultRoomWallReflect, "amplitude reflection coefficient at room wall surfaces (0-1)")
+
+	// wallClockAvgFramesFlag smooths wall clock dt sampling to avoid occasional jitter.
+	wallClockAvgFramesFlag = flag.Int("wall-clock-avg-frames", defaultWallClockAvgFrames, "moving average window (frames) for wall clock dt sampling; <=1 disables smoothing")
 )
