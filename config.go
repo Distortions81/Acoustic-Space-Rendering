@@ -6,8 +6,8 @@ import "time"
 // application. These values define the grid size and timing for
 // the acoustic wave simulation.
 const (
-	w, h                      = 512, 512
-	windowScale               = 2
+	w, h                      = 1024, 1024
+	windowScale               = 1
 	defaultWorldWidthFeet     = 100
 	defaultCellSizeM          = defaultWorldWidthFeet * 0.3048 / float64(w)
 	defaultAirTempC           = 20.0
@@ -15,7 +15,7 @@ const (
 	emitterRad                = 1
 	defaultWalkSpeedMPS       = 1.4
 	defaultRunSpeedMPS        = 3.0
-	defaultEmitterGain        = 0.2
+	defaultEmitterGain        = 1
 	stepDelay                 = 60 / 4
 	defaultTPS                = 60.0
 	defaultSimMultiplier      = 735
@@ -45,6 +45,7 @@ const (
 var worldBoundaryReflect = defaultBoundaryReflect
 
 var worldScaleMetersPerCell float64
+var targetTPS = defaultTPS
 
 var (
 	roomWallSegments      = defaultWallSegments

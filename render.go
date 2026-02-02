@@ -14,9 +14,9 @@ import (
 func (g *Game) Draw(screen *ebiten.Image) {
 	if g.gpuSolver != nil {
 		pixels := g.gpuSolver.PixelBytes()
-		if len(pixels) == w*h*4 {
-			screen.WritePixels(pixels)
-		}
+		//if len(pixels) == w*h*4 {
+		screen.WritePixels(pixels)
+		//}
 	}
 
 	baseX := int(g.emitterX)
@@ -41,8 +41,12 @@ func (g *Game) Draw(screen *ebiten.Image) {
 				tps = 0
 			}
 			simMultiplier := 0.0
-			if defaultTPS > 0 {
-				simMultiplier = tps / defaultTPS
+			baseTPS := defaultTPS
+			if targetTPS > 0 {
+				baseTPS = targetTPS
+			}
+			if baseTPS > 0 {
+				simMultiplier = tps / baseTPS
 			}
 			simMS := g.lastSimDuration.Seconds() * 1000
 			simSteps := g.simStepsPerSecond()

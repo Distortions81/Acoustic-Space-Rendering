@@ -55,11 +55,7 @@ type Game struct {
 	audioChunk    []float32
 	earChunk      []float32
 
-	stepCarry float64
-
-	lastUpdateTime time.Time
-	lastUpdateDT   float64
-	wallClockAvg   wallClockAverager
+	lastUpdateDT float64
 
 	debugOverlayMessage    string
 	nextDebugOverlayUpdate time.Time
@@ -80,10 +76,15 @@ func newGame() *Game {
 		autoWalkRand:      rand.New(rand.NewSource(time.Now().UnixNano() + 2)),
 		simStepMultiplier: defaultSimMultiplier,
 	}
+	if targetTPS > 0 {
+		// Keep steps/s approximately constant as TPS changes.
+		g.simStepMultiplier = int(math.Round(float64(audioSampleRate) / targetTPS))
+	}
 	if wallClockAvgFramesFlag != nil {
-		g.wallClockAvg.Init(*wallClockAvgFramesFlag)
+		// kept for compatibility with existing defaults; no-op in fixed-timestep mode
+		_ = *wallClockAvgFramesFlag
 	} else {
-		g.wallClockAvg.Init(defaultWallClockAvgFrames)
+		_ = defaultWallClockAvgFrames
 	}
 	if solver, err := newOpenCLWaveSolver(w, h); err != nil {
 		log.Fatalf("OpenCL initialization failed: %v", err)
@@ -186,21 +187,13 @@ func (g *Game) randomizeEmitterStart(minDist int) {
 
 // Update advances the simulation, produces optional audio, and refreshes visibility data.
 func (g *Game) Update() error {
-	now := time.Now()
-	dt := 1.0 / defaultTPS
-	if g.lastUpdateTime.IsZero() {
-		dt = 1.0 / defaultTPS
+	// Prototype mode: assume steady 60Hz simulation timing. This avoids runaway
+	// step counts when rendering slows down.
+	if targetTPS > 0 {
+		g.lastUpdateDT = 1.0 / targetTPS
 	} else {
-		dt = now.Sub(g.lastUpdateTime).Seconds()
-		// Clamp to keep the simulation from exploding after stalls.
-		if dt < 0 {
-			dt = 0
-		} else if dt > 0.1 {
-			dt = 0.1
-		}
+		g.lastUpdateDT = 1.0 / defaultTPS
 	}
-	g.lastUpdateDT = g.wallClockAvg.Add(dt)
-	g.lastUpdateTime = now
 
 	g.handleControlToggle()
 	dx, dy := g.movementVector()
@@ -261,17 +254,7 @@ func (g *Game) Update() error {
 		g.refreshVisibleMask()
 	}
 
-	targetStepsPerSecond := defaultTPS * float64(g.simStepMultiplier)
-	if g.audioStream != nil && captureStepSamplesFlag != nil && *captureStepSamplesFlag {
-		targetStepsPerSecond = audioSampleRate
-	}
-	stepsFloat := targetStepsPerSecond * g.lastUpdateDT
-	if stepsFloat < 1 {
-		stepsFloat = 1
-	}
-	g.stepCarry += stepsFloat
-	steps := int(math.Floor(g.stepCarry))
-	g.stepCarry -= float64(steps)
+	steps := g.simStepMultiplier
 	if steps < minSimMultiplier {
 		steps = minSimMultiplier
 	} else if steps > maxSimMultiplier {

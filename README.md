@@ -82,6 +82,7 @@ Customize simulation behavior with additional flags:
 - `-world-boundary-reflect=<value>` — amplitude reflection coefficient for the outer world boundary (0–1), used when `-world-boundary-absorb=false`; default is `0.98`.
 - `-world-boundary-absorb=<true|false>` — when `true`, force the world boundary to be absorbing (no reflection), overriding `-world-boundary-reflect` (default `true`).
 - `-wall-reflect-mult=<value>` — multiplier applied to wall reflection coefficients (scales both `-room-wall-reflect` and `-world-boundary-reflect`); set to `0.5` to globally halve reflections (default `1.0`).
+- `-tps=<value>` — target tick/update rate (lower values like `30` or `15` reduce overhead and keep steps/s roughly constant by increasing steps-per-tick).
 - `-emitter-gain=<value>` — scales `-audio-loop` samples before they are injected into the wave field (default `0.2`).
 - `-air-abs-dbpm=<value>` — approximate air absorption in dB per meter (amplitude), applied as extra per-step damping (default `0.01`).
 - `-air-temp-c=<value>` — sets air temperature in °C; used to compute the speed of sound that the derived world scale is based on (default `20`).

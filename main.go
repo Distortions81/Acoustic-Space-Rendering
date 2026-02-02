@@ -19,6 +19,13 @@ func main() {
 		set[f.Name] = true
 	})
 
+	if tpsFlag != nil && *tpsFlag > 0 {
+		targetTPS = float64(*tpsFlag)
+	}
+	if targetTPS < 1 {
+		targetTPS = 1
+	}
+
 	// Prototype behavior: always run the wave solver at the maximum stable speed
 	// (speedCoeff=0.5), and derive the world scale from an assumed real-time step rate.
 	// This keeps audio fidelity high at our computational limits.
@@ -128,6 +135,7 @@ func main() {
 
 	ebiten.SetWindowSize(w*windowScale, h*windowScale)
 	ebiten.SetWindowTitle("Acoustic Steps")
+	ebiten.SetTPS(int(targetTPS))
 	if err := ebiten.RunGame(g); err != nil {
 		panic(err)
 	}
