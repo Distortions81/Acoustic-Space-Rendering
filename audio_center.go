@@ -47,7 +47,7 @@ func (s *centerAudioStream) EnqueueInterleaved(samples []float32) {
 	for i := 0; i < len(samples); i += 2 {
 		left := softClip(samples[i])
 		right := softClip(samples[i+1])
-		s.pending = append(s.pending, left, right)
+		s.pending = append(s.pending, right, left)
 	}
 	s.mu.Unlock()
 }

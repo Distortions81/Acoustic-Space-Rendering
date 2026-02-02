@@ -7,7 +7,7 @@ import "time"
 // the acoustic wave simulation.
 const (
 	w, h                     = 950, 950
-	windowScale              = 1
+	windowScale              = 2
 	defaultWorldWidthFeet    = 100
 	defaultCellSizeM         = defaultWorldWidthFeet * 0.3048 / float64(w)
 	defaultAirTempC          = 20.0
@@ -26,7 +26,7 @@ const (
 	defaultBoundaryReflect   = 0.98
 	defaultAirAbsDbPerM      = 0.01
 	visualGamma              = 1.0
-	defaultWallSegments      = 5
+	defaultWallSegments      = 4
 	defaultWallMinLenM       = 1.0
 	defaultWallMaxLenM       = 12.0
 	defaultWallThicknessM    = 0.15
