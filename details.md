@@ -155,6 +155,8 @@ main files and functions in the repository.
 - `worldBoundaryReflect` in `config.go` holds the configured reflection coefficient.
   - In `main.go`, `-world-boundary-absorb` and `-world-boundary-reflect` are
     parsed and stored into `worldBoundaryReflect`.
+  - `-wall-reflect-mult` scales both world and room wall reflection
+    coefficients as a quick global “dry/wet” control.
   - When `-world-boundary-absorb=true` (the default), `main.go` sets
     `worldBoundaryReflect` to `0`, making the world boundary absorbing.
 - After each call to `wave_step`, `openCLWaveSolver.runBoundaryAccumulate`

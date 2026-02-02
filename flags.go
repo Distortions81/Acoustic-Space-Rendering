@@ -15,6 +15,9 @@ var (
 	// worldBoundaryAbsorbFlag forces the outer boundary to be absorbing (no reflection).
 	worldBoundaryAbsorbFlag = flag.Bool("world-boundary-absorb", true, "treat the world boundary as absorbing (overrides world boundary reflection when true)")
 
+	// wallReflectMultFlag scales all wall reflection coefficients (room walls + world boundary).
+	wallReflectMultFlag = flag.Float64("wall-reflect-mult", 1.0, "multiplier applied to wall reflection coefficients (scales -room-wall-reflect and -world-boundary-reflect); 0 disables reflections")
+
 	// preferFP16Flag enables 16-bit wave buffers on devices that support half precision.
 	preferFP16Flag = flag.Bool("prefer-fp16", false, "use 16-bit floats for the OpenCL solver when supported")
 
@@ -44,7 +47,7 @@ var (
 	audioBufferMSFlag = flag.Int("audio-buffer-ms", defaultAudioBufferMS, "audio output buffer size in milliseconds")
 
 	// audioLoopFlag lets the user provide a WAV file that will loop instead of the impulse samples.
-	audioLoopFlag = flag.String("audio-loop", "speech.wav", "path to a WAV file to loop when audio output is enabled")
+	audioLoopFlag = flag.String("audio-loop", "test2.wav", "path to a WAV file to loop when audio output is enabled")
 
 	// disableWalkingPulsesFlag suppresses the walking-generated pressure pulses.
 	disableWalkingPulsesFlag = flag.Bool("disable-walking-pulses", true, "prevent movement from queuing impulses into the wave field")

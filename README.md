@@ -81,6 +81,7 @@ Customize simulation behavior with additional flags:
 
 - `-world-boundary-reflect=<value>` — amplitude reflection coefficient for the outer world boundary (0–1), used when `-world-boundary-absorb=false`; default is `0.98`.
 - `-world-boundary-absorb=<true|false>` — when `true`, force the world boundary to be absorbing (no reflection), overriding `-world-boundary-reflect` (default `true`).
+- `-wall-reflect-mult=<value>` — multiplier applied to wall reflection coefficients (scales both `-room-wall-reflect` and `-world-boundary-reflect`); set to `0.5` to globally halve reflections (default `1.0`).
 - `-emitter-gain=<value>` — scales `-audio-loop` samples before they are injected into the wave field (default `0.25`).
 - `-air-abs-dbpm=<value>` — approximate air absorption in dB per meter (amplitude), applied as extra per-step damping (default `0.01`).
 - `-cell-size-m=<value>` — sets the physical size of one grid cell in meters; used to compute solver coefficients from real-world units (default `0.025`).

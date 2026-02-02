@@ -60,6 +60,9 @@ type Game struct {
 	lastUpdateTime time.Time
 	lastUpdateDT   float64
 	wallClockAvg   wallClockAverager
+
+	debugOverlayMessage    string
+	nextDebugOverlayUpdate time.Time
 }
 
 const minEmitterStartDistancePixels = 128

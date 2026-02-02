@@ -17,6 +17,13 @@ func main() {
 	flag.CommandLine.Visit(func(f *flag.Flag) {
 		set[f.Name] = true
 	})
+	wallReflectMult := 1.0
+	if wallReflectMultFlag != nil {
+		wallReflectMult = *wallReflectMultFlag
+	}
+	if wallReflectMult < 0 {
+		wallReflectMult = 0
+	}
 	if worldBoundaryAbsorbFlag != nil && *worldBoundaryAbsorbFlag {
 		worldBoundaryReflect = 0
 	} else {
@@ -25,6 +32,10 @@ func main() {
 	if worldBoundaryReflect < 0 {
 		worldBoundaryReflect = 0
 	} else if worldBoundaryReflect > 1 {
+		worldBoundaryReflect = 1
+	}
+	worldBoundaryReflect *= wallReflectMult
+	if worldBoundaryReflect > 1 {
 		worldBoundaryReflect = 1
 	}
 
@@ -67,6 +78,10 @@ func main() {
 	if roomWallReflect < 0 {
 		roomWallReflect = 0
 	} else if roomWallReflect > 1 {
+		roomWallReflect = 1
+	}
+	roomWallReflect *= wallReflectMult
+	if roomWallReflect > 1 {
 		roomWallReflect = 1
 	}
 

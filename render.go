@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"image/color"
 	"math"
+	"time"
 
 	"github.com/hajimehoshi/ebiten/v2"
 	"github.com/hajimehoshi/ebiten/v2/ebitenutil"
@@ -32,21 +33,25 @@ func (g *Game) Draw(screen *ebiten.Image) {
 	g.drawScaleBar(screen)
 
 	if *debugFlag {
-		fps := ebiten.ActualFPS()
-		tps := ebiten.ActualTPS()
-		if tps < 0 {
-			tps = 0
+		now := time.Now()
+		if g.debugOverlayMessage == "" || !now.Before(g.nextDebugOverlayUpdate) {
+			fps := ebiten.ActualFPS()
+			tps := ebiten.ActualTPS()
+			if tps < 0 {
+				tps = 0
+			}
+			simMultiplier := 0.0
+			if defaultTPS > 0 {
+				simMultiplier = tps / defaultTPS
+			}
+			simMS := g.lastSimDuration.Seconds() * 1000
+			simSteps := g.simStepsPerSecond()
+			worldWidthFeet := float64(w) * cellSizeMeters() * 3.28084
+			g.debugOverlayMessage = fmt.Sprintf("FPS: %.1f\nSim speed: %.2fx (%.1f TPS)\nSim steps: %.1f/s (mult %dx, +/-)\nWorld: %.1f ft\nControl: %s (Tab)\nSim: %.2f ms",
+				fps, simMultiplier, tps, simSteps, g.simStepMultiplier, worldWidthFeet, g.controlModeLabel(), simMS)
+			g.nextDebugOverlayUpdate = now.Add(time.Second)
 		}
-		simMultiplier := 0.0
-		if defaultTPS > 0 {
-			simMultiplier = tps / defaultTPS
-		}
-		simMS := g.lastSimDuration.Seconds() * 1000
-		simSteps := g.simStepsPerSecond()
-		worldWidthFeet := float64(w) * cellSizeMeters() * 3.28084
-		debugMsg := fmt.Sprintf("FPS: %.1f\nSim speed: %.2fx (%.1f TPS)\nSim steps: %.1f/s (mult %dx, +/-)\nWorld: %.1f ft\nControl: %s (Tab)\nSim: %.2f ms",
-			fps, simMultiplier, tps, simSteps, g.simStepMultiplier, worldWidthFeet, g.controlModeLabel(), simMS)
-		ebitenutil.DebugPrint(screen, debugMsg)
+		ebitenutil.DebugPrint(screen, g.debugOverlayMessage)
 	}
 }
 
