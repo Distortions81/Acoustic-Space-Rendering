@@ -47,31 +47,9 @@ func (g *Game) Draw(screen *ebiten.Image) {
 			simMS := g.lastSimDuration.Seconds() * 1000
 			simSteps := g.simStepsPerSecond()
 			worldWidthFeet := float64(w) * cellSizeMeters() * 3.28084
-			coeffLine := ""
-			if g.lastWaveCoefficientsValid {
-				coeffs := g.lastWaveCoefficients
-				ceff := 0.0
-				if coeffs.DtSeconds > 0 {
-					ceff = math.Sqrt(float64(coeffs.SpeedCoeff)) * coeffs.DxMeters / coeffs.DtSeconds
-				}
-				dispersion := ""
-				if coeffs.DispersionCenterHz > 0 {
-					dispersion = fmt.Sprintf("  Disp: %.0fHz x%.3f", coeffs.DispersionCenterHz, coeffs.DispersionFactor)
-				}
-				requiredStepsPerSec := 0.0
-				if coeffs.DxMeters > 0 {
-					requiredStepsPerSec = coeffs.SpeedSoundMS / (math.Sqrt(maxStableSpeedCoeff) * coeffs.DxMeters)
-				}
-				clamp := ""
-				if coeffs.Clamped {
-					clamp = " (CLAMPED)"
-				}
-				coeffLine = fmt.Sprintf("\nSound: %.0f m/s (eff %.0f)%s\nDX: %.1f cm  Steps/s: %.0f (min %.0f)",
-					coeffs.SpeedSoundMS, ceff, clamp, coeffs.DxMeters*100, coeffs.StepsPerSec, requiredStepsPerSec)
-				coeffLine += dispersion
-			}
-			g.debugOverlayMessage = fmt.Sprintf("FPS: %.1f\nSim speed: %.2fx (%.1f TPS)\nSim steps: %.1f/s (mult %dx, +/-)\nWorld: %.1f ft\nControl: %s (Tab)\nSim: %.2f ms%s",
-				fps, simMultiplier, tps, simSteps, g.simStepMultiplier, worldWidthFeet, g.controlModeLabel(), simMS, coeffLine)
+			dxCM := cellSizeMeters() * 100
+			g.debugOverlayMessage = fmt.Sprintf("FPS: %.1f\nSim speed: %.2fx (%.1f TPS)\nSim steps: %.1f/s (mult %dx, +/-)\nWorld: %.1f ft\nDX: %.1f cm\nControl: %s (Tab)\nSim: %.2f ms",
+				fps, simMultiplier, tps, simSteps, g.simStepMultiplier, worldWidthFeet, dxCM, g.controlModeLabel(), simMS)
 			g.nextDebugOverlayUpdate = now.Add(time.Second)
 		}
 		ebitenutil.DebugPrint(screen, g.debugOverlayMessage)

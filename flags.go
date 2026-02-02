@@ -58,32 +58,11 @@ var (
 	// emitterGainFlag scales the audio-loop-driven emitter samples before they are injected into the field.
 	emitterGainFlag = flag.Float64("emitter-gain", defaultEmitterGain, "gain applied to audio-loop emitter samples before injection")
 
-	// emitterHighpassHzFlag applies a first-order highpass filter to the audio-loop-driven
-	// emitter samples before they are injected into the field.
-	emitterHighpassHzFlag = flag.Float64("emitter-highpass-hz", 0, "highpass cutoff in Hz applied to emitter samples before injection; 0 disables")
-
 	// airAbsDbPerMFlag controls additional per-step damping from frequency-agnostic air absorption.
 	airAbsDbPerMFlag = flag.Float64("air-abs-dbpm", defaultAirAbsDbPerM, "approximate air absorption in dB per meter (amplitude), applied as per-step damping")
 
-	// cellSizeMFlag defines the physical size of one grid cell in meters.
-	cellSizeMFlag = flag.Float64("cell-size-m", defaultCellSizeM, "meters per grid cell used for solver coefficient calibration")
-
-	// cellSizeCMFlag defines the physical size of one grid cell in centimeters. When set to >0, it overrides -cell-size-m.
-	cellSizeCMFlag = flag.Float64("cell-size-cm", 0, "centimeters per grid cell (overrides -cell-size-m when >0)")
-
-	// cellSizeMMFlag defines the physical size of one grid cell in millimeters. When set to >0, it overrides -cell-size-m.
-	cellSizeMMFlag = flag.Float64("cell-size-mm", 0, "millimeters per grid cell (overrides -cell-size-m when >0)")
-
-	// worldWidthFeetFlag sets the physical world width in feet. When set to >0, it
-	// overrides the other cell size flags by defining dx = worldWidthFeet / w.
-	worldWidthFeetFlag = flag.Float64("world-width-ft", 0, "physical world width in feet (overrides cell size flags when >0)")
-
 	// airTempCFlag configures the air temperature (°C) used to compute the speed of sound.
 	airTempCFlag = flag.Float64("air-temp-c", defaultAirTempC, "air temperature in °C used to compute the speed of sound")
-
-	// dispersionCenterHzFlag adjusts the solver's effective wave speed to better match
-	// the physical speed of sound at a chosen frequency (helps counter numerical dispersion).
-	dispersionCenterHzFlag = flag.Float64("dispersion-center-hz", 0, "frequency in Hz to calibrate phase speed against (numerical dispersion compensation); 0 disables")
 
 	// rt60SecondsFlag configures the target decay time used to compute per-step damping.
 	rt60SecondsFlag = flag.Float64("rt60-s", defaultRT60Seconds, "target RT60 decay time in seconds (controls per-step damping); <=0 disables damping")
@@ -101,7 +80,7 @@ var (
 	// 0 disables directionality, 1 uses a full cardioid response.
 	earDirectivityFlag = flag.Float64("ear-directivity", defaultEarDirectivity, "ear directionality strength (0-1); 0 disables, 1 is full cardioid vs emitter direction")
 
-	// Room wall generation parameters (converted from meters to cells using -cell-size-m).
+	// Room wall generation parameters (converted from meters to cells using the derived world scale).
 	roomWallSegmentsFlag         = flag.Int("room-wall-segments", defaultWallSegments, "number of random room wall segments to generate")
 	roomWallMinLenMFlag          = flag.Float64("room-wall-min-len-m", defaultWallMinLenM, "minimum room wall segment length in meters")
 	roomWallMaxLenMFlag          = flag.Float64("room-wall-max-len-m", defaultWallMaxLenM, "maximum room wall segment length in meters")

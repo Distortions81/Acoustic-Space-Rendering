@@ -82,21 +82,15 @@ Customize simulation behavior with additional flags:
 - `-world-boundary-reflect=<value>` — amplitude reflection coefficient for the outer world boundary (0–1), used when `-world-boundary-absorb=false`; default is `0.98`.
 - `-world-boundary-absorb=<true|false>` — when `true`, force the world boundary to be absorbing (no reflection), overriding `-world-boundary-reflect` (default `true`).
 - `-wall-reflect-mult=<value>` — multiplier applied to wall reflection coefficients (scales both `-room-wall-reflect` and `-world-boundary-reflect`); set to `0.5` to globally halve reflections (default `1.0`).
-- `-emitter-gain=<value>` — scales `-audio-loop` samples before they are injected into the wave field (default `0.25`).
-- `-emitter-highpass-hz=<value>` — first-order highpass cutoff (Hz) applied to emitter samples before injection; use `250` to reduce low-frequency buildup (default `0`, disabled).
+- `-emitter-gain=<value>` — scales `-audio-loop` samples before they are injected into the wave field (default `0.2`).
 - `-air-abs-dbpm=<value>` — approximate air absorption in dB per meter (amplitude), applied as extra per-step damping (default `0.01`).
-- `-cell-size-m=<value>` — sets the physical size of one grid cell in meters; used to compute solver coefficients from real-world units (default `0.025`).
-- `-cell-size-cm=<value>` — sets the physical size of one grid cell in centimeters (overrides `-cell-size-m` when `>0`).
-- `-cell-size-mm=<value>` — sets the physical size of one grid cell in millimeters (overrides `-cell-size-m` when `>0`).
-- `-world-width-ft=<value>` — sets the physical world width in feet (overrides cell size flags when `>0`).
-- `-air-temp-c=<value>` — sets air temperature in °C; used to compute speed of sound for the solver (default `20`).
-- `-dispersion-center-hz=<value>` — frequency (Hz) used to calibrate the solver’s phase speed (numerical dispersion compensation); use `250` to bias accuracy toward vocal range (default `0`, disabled).
+- `-air-temp-c=<value>` — sets air temperature in °C; used to compute the speed of sound that the derived world scale is based on (default `20`).
 - `-rt60-s=<value>` — sets an approximate RT60 decay time in seconds; used to compute per-step damping (`<=0` disables damping). When `-rt60-auto=true` and `-rt60-s` is not explicitly set, a derived RT60 is used instead.
-- `-rt60-auto=<true|false>` — when `true`, derive a more realistic RT60 default from world size (`-world-width-ft` / `-cell-size-*`) and `-room-wall-material` (default `true`).
+- `-rt60-auto=<true|false>` — when `true`, derive a more realistic RT60 default from the derived world size and `-room-wall-material` (default `true`).
 - `-run-speed-mps=<value>` — sets listener running speed in meters/second; used for WASD/autowalk movement (default `3.0`).
 - `-walk-speed-mps=<value>` — sets listener walking speed in meters/second while holding Shift (default `1.4`).
 - `-ear-directivity=<value>` — ear directionality strength (0–1) applied vs the emitter direction; `0` disables (default `0.8`).
-- `-room-wall-segments=<value>` — number of random interior “room wall” segments to generate (default `20`).
+- `-room-wall-segments=<value>` — number of random interior “room wall” segments to generate (default `5`).
 - `-room-wall-min-len-m=<value>` — minimum room wall segment length in meters (default `1.0`).
 - `-room-wall-max-len-m=<value>` — maximum room wall segment length in meters (default `12.0`).
 - `-room-wall-thickness-m=<value>` — approximate room wall thickness in meters (default `0.15`).
@@ -110,4 +104,4 @@ Customize simulation behavior with additional flags:
 - `-disable-walking-pulses=<true|false>` — when `true`, walking no longer queues the default impulse pulses so you only see the WAV-driven source or the silent field.
 - `-show-last-frame=<true|false>` — when `true`, render only the most recent simulation frame instead of blending values across previous steps so you can inspect the raw wavefront (default `false`).
 
-By default the application already runs with `-debug`, `-enable-audio`, `-capture-step-samples`, and `-disable-walking-pulses` while looping `test.wav`. Pass flag overrides such as `-debug=false` or `-audio-loop=their.wav` to change that behavior.
+By default the application already runs with `-debug`, `-enable-audio`, `-capture-step-samples`, and `-disable-walking-pulses` while looping `test2.wav`. Pass flag overrides such as `-debug=false` or `-audio-loop=their.wav` to change that behavior.

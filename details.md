@@ -54,12 +54,12 @@ main files and functions in the repository.
     values plus the Laplacian term.
   - Multiplies by a damping factor so energy decays over time.
 - The constants that control this behavior are defined in `config.go`:
-  - The solver now derives `damp` and `speed` coefficients from real-world units:
-    - `speed` is computed as `(c·dt/dx)^2`, where `c` is the speed of sound,
-      `dt` is the simulation time step, and `dx` is meters per grid cell.
-    - `damp` is computed from a target RT60 (seconds) as `exp(-ln(1000)·dt/RT60)`.
-  - These inputs come from runtime flags (`-cell-size-m`, `-air-temp-c`, `-rt60-s`)
-    and the current simulation step rate.
+  - The solver uses the maximum stable wave speed coefficient for this stencil
+    (`speedCoeff=0.5`) to preserve audio fidelity at our performance limits.
+  - The world scale (`dx`, meters per cell) is derived once at startup from an
+    assumed real-time step rate and `-air-temp-c`.
+  - `damp` is computed from a target RT60 (seconds) as `exp(-ln(1000)·dt/RT60)`,
+    using the current simulation step rate.
 - When an emitter is active (see “Continuous audio‑driven emitter” below),
   `wave_step` overwrites the computed value at the emitter’s cell with a
   supplied source value instead of the normal update.
@@ -125,7 +125,7 @@ main files and functions in the repository.
     - `-room-wall-segments` controls how many segments are generated.
     - `-room-wall-min-len-m` / `-room-wall-max-len-m` define segment lengths in meters.
     - `-room-wall-thickness-m` / `-room-wall-thickness-jitter-m` define thickness in meters.
-    - These meter values are converted to cell units using `-cell-size-m`.
+    - These meter values are converted to cell units using the derived `dx`.
   - For each segment, it calls `trySetWall` to mark grid cells as walls.
 - `trySetWall` enforces:
   - Walls stay away from the window border.

@@ -20,9 +20,6 @@ type waveCoefficients struct {
 	SpeedSoundMS float64
 	Courant      float64
 	Clamped      bool
-
-	DispersionCenterHz float64
-	DispersionFactor   float64
 }
 
 func speedOfSoundMS(tempC float64) float64 {
@@ -49,46 +46,8 @@ func computeWaveCoefficients(stepsPerSecond float64) (waveCoefficients, error) {
 		return waveCoefficients{}, fmt.Errorf("computed speed of sound must be > 0 (got %.6f)", c)
 	}
 
-	courant := c * dt / dx
-	speedCoeff := courant * courant
+	speedCoeff := float64(maxStableSpeedCoeff)
 	clamped := false
-	if speedCoeff > maxStableSpeedCoeff {
-		speedCoeff = maxStableSpeedCoeff
-		clamped = true
-	}
-
-	dispersionHz := 0.0
-	dispersionFactor := 1.0
-	if dispersionCenterHzFlag != nil && *dispersionCenterHzFlag > 0 {
-		dispersionHz = *dispersionCenterHzFlag
-		// Try to counter numerical dispersion by choosing an effective Courant number
-		// such that the phase speed matches c at the requested frequency.
-		//
-		// For a 2D 5-point stencil, the discrete dispersion relation is:
-		//   sin^2(ω dt / 2) = C^2 [sin^2(kx dx / 2) + sin^2(ky dx / 2)]
-		// We choose a representative direction by averaging axis and diagonal travel.
-		k := 2.0 * math.Pi * dispersionHz / c
-		omegaTarget := c * k
-		sinOmega := math.Sin(omegaTarget * dt / 2.0)
-		sinAxis := math.Sin(k * dx / 2.0)
-		sinDiag := math.Sin(k * dx / (2.0 * math.Sqrt2))
-		denomAxis := math.Abs(sinAxis)
-		denomDiag := math.Sqrt(2.0 * sinDiag * sinDiag)
-		if denomAxis > 1e-8 && denomDiag > 1e-8 {
-			cAxis := math.Abs(sinOmega) / denomAxis
-			cDiag := math.Abs(sinOmega) / denomDiag
-			cTarget := 0.5 * (cAxis + cDiag)
-			targetCoeff := cTarget * cTarget
-			if targetCoeff > 0 {
-				dispersionFactor = targetCoeff / speedCoeff
-				speedCoeff = targetCoeff
-				if speedCoeff > maxStableSpeedCoeff {
-					speedCoeff = maxStableSpeedCoeff
-					clamped = true
-				}
-			}
-		}
-	}
 
 	dampPerStep := 1.0
 	if rt60SecondsFlag != nil && *rt60SecondsFlag > 0 {
@@ -114,16 +73,14 @@ func computeWaveCoefficients(stepsPerSecond float64) (waveCoefficients, error) {
 	}
 
 	return waveCoefficients{
-		DampPerStep:        float32(dampPerStep),
-		SpeedCoeff:         float32(speedCoeff),
-		StepsPerSec:        stepsPerSecond,
-		DtSeconds:          dt,
-		DxMeters:           dx,
-		AirTempC:           tempC,
-		SpeedSoundMS:       c,
-		Courant:            courant,
-		Clamped:            clamped,
-		DispersionCenterHz: dispersionHz,
-		DispersionFactor:   dispersionFactor,
+		DampPerStep:  float32(dampPerStep),
+		SpeedCoeff:   float32(speedCoeff),
+		StepsPerSec:  stepsPerSecond,
+		DtSeconds:    dt,
+		DxMeters:     dx,
+		AirTempC:     tempC,
+		SpeedSoundMS: c,
+		Courant:      math.Sqrt(maxStableSpeedCoeff),
+		Clamped:      clamped,
 	}, nil
 }

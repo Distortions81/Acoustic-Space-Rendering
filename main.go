@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"log"
+	"math"
 	"os"
 	"strings"
 	"time"
@@ -17,6 +18,20 @@ func main() {
 	flag.CommandLine.Visit(func(f *flag.Flag) {
 		set[f.Name] = true
 	})
+
+	// Prototype behavior: always run the wave solver at the maximum stable speed
+	// (speedCoeff=0.5), and derive the world scale from an assumed real-time step rate.
+	// This keeps audio fidelity high at our computational limits.
+	tempC := defaultAirTempC
+	if airTempCFlag != nil {
+		tempC = *airTempCFlag
+	}
+	assumedStepsPerSecond := defaultTPS * float64(defaultSimMultiplier) // ~= 44100
+	c := speedOfSoundMS(tempC)
+	if assumedStepsPerSecond > 0 && c > 0 {
+		worldScaleMetersPerCell = c / (assumedStepsPerSecond * math.Sqrt(maxStableSpeedCoeff))
+	}
+
 	wallReflectMult := 1.0
 	if wallReflectMultFlag != nil {
 		wallReflectMult = *wallReflectMultFlag

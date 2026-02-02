@@ -44,6 +44,8 @@ const (
 
 var worldBoundaryReflect = defaultBoundaryReflect
 
+var worldScaleMetersPerCell float64
+
 var (
 	roomWallSegments      = defaultWallSegments
 	roomWallMinLenM       = defaultWallMinLenM
