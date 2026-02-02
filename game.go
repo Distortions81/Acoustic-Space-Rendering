@@ -55,6 +55,9 @@ type Game struct {
 	audioChunk    []float32
 	earChunk      []float32
 
+	emitterHPX1 float32
+	emitterHPY1 float32
+
 	stepCarry float64
 
 	lastUpdateTime time.Time
@@ -63,6 +66,9 @@ type Game struct {
 
 	debugOverlayMessage    string
 	nextDebugOverlayUpdate time.Time
+
+	lastWaveCoefficients      waveCoefficients
+	lastWaveCoefficientsValid bool
 }
 
 const minEmitterStartDistancePixels = 128
@@ -277,6 +283,18 @@ func (g *Game) Update() error {
 	} else if steps > maxSimMultiplier {
 		steps = maxSimMultiplier
 	}
+
+	if g.lastUpdateDT > 0 {
+		coeffs, err := computeWaveCoefficients(float64(steps) / g.lastUpdateDT)
+		if err == nil {
+			g.lastWaveCoefficients = coeffs
+			g.lastWaveCoefficientsValid = true
+		} else {
+			g.lastWaveCoefficientsValid = false
+		}
+	} else {
+		g.lastWaveCoefficientsValid = false
+	}
 	simStart := time.Now()
 	var visibleStamp []uint32
 	var visibleGen uint32
@@ -286,7 +304,11 @@ func (g *Game) Update() error {
 	}
 	var emitterData *audioEmitterData
 	if g.audioPressure != nil && steps > 0 {
-		if samples := g.fillAudioChunk(steps); len(samples) > 0 {
+		dtStepSeconds := 0.0
+		if targetStepsPerSecond > 0 {
+			dtStepSeconds = 1.0 / targetStepsPerSecond
+		}
+		if samples := g.fillAudioChunk(steps, dtStepSeconds); len(samples) > 0 {
 			if idx, ok := g.emitterAudioIndex(); ok {
 				emitterData = &audioEmitterData{index: idx, samples: samples}
 			}
@@ -359,7 +381,7 @@ func (g *Game) logCapturedEarSamples(samples []float32) {
 	g.lastSampleLog = now
 }
 
-func (g *Game) fillAudioChunk(size int) []float32 {
+func (g *Game) fillAudioChunk(size int, dtStepSeconds float64) []float32 {
 	if g.audioPressure == nil || size <= 0 {
 		return nil
 	}
@@ -377,6 +399,24 @@ func (g *Game) fillAudioChunk(size int) []float32 {
 		for i, v := range g.audioChunk {
 			g.audioChunk[i] = v * gain32
 		}
+	}
+
+	if emitterHighpassHzFlag != nil && *emitterHighpassHzFlag > 0 && dtStepSeconds > 0 {
+		cutoffHz := *emitterHighpassHzFlag
+		// One-pole highpass: y[n] = a * (y[n-1] + x[n] - x[n-1])
+		// with a = RC / (RC + dt), RC = 1/(2*pi*fc).
+		rc := 1.0 / (2.0 * math.Pi * cutoffHz)
+		alpha := float32(rc / (rc + dtStepSeconds))
+		x1 := g.emitterHPX1
+		y1 := g.emitterHPY1
+		for i, x := range g.audioChunk {
+			y := alpha * (y1 + x - x1)
+			g.audioChunk[i] = y
+			x1 = x
+			y1 = y
+		}
+		g.emitterHPX1 = x1
+		g.emitterHPY1 = y1
 	}
 	return g.audioChunk
 }

@@ -58,6 +58,10 @@ var (
 	// emitterGainFlag scales the audio-loop-driven emitter samples before they are injected into the field.
 	emitterGainFlag = flag.Float64("emitter-gain", defaultEmitterGain, "gain applied to audio-loop emitter samples before injection")
 
+	// emitterHighpassHzFlag applies a first-order highpass filter to the audio-loop-driven
+	// emitter samples before they are injected into the field.
+	emitterHighpassHzFlag = flag.Float64("emitter-highpass-hz", 0, "highpass cutoff in Hz applied to emitter samples before injection; 0 disables")
+
 	// airAbsDbPerMFlag controls additional per-step damping from frequency-agnostic air absorption.
 	airAbsDbPerMFlag = flag.Float64("air-abs-dbpm", defaultAirAbsDbPerM, "approximate air absorption in dB per meter (amplitude), applied as per-step damping")
 
@@ -76,6 +80,10 @@ var (
 
 	// airTempCFlag configures the air temperature (°C) used to compute the speed of sound.
 	airTempCFlag = flag.Float64("air-temp-c", defaultAirTempC, "air temperature in °C used to compute the speed of sound")
+
+	// dispersionCenterHzFlag adjusts the solver's effective wave speed to better match
+	// the physical speed of sound at a chosen frequency (helps counter numerical dispersion).
+	dispersionCenterHzFlag = flag.Float64("dispersion-center-hz", 0, "frequency in Hz to calibrate phase speed against (numerical dispersion compensation); 0 disables")
 
 	// rt60SecondsFlag configures the target decay time used to compute per-step damping.
 	rt60SecondsFlag = flag.Float64("rt60-s", defaultRT60Seconds, "target RT60 decay time in seconds (controls per-step damping); <=0 disables damping")
