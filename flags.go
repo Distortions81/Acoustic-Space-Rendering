@@ -40,7 +40,7 @@ var (
 	enableAudioFlag = flag.Bool("enable-audio", true, "enable experimental audio output from center samples")
 
 	// audioLoopFlag lets the user provide a WAV file that will loop instead of the impulse samples.
-	audioLoopFlag = flag.String("audio-loop", "test.wav", "path to a WAV file to loop when audio output is enabled")
+	audioLoopFlag = flag.String("audio-loop", "test2.wav", "path to a WAV file to loop when audio output is enabled")
 
 	// disableWalkingPulsesFlag suppresses the walking-generated pressure pulses.
 	disableWalkingPulsesFlag = flag.Bool("disable-walking-pulses", true, "prevent movement from queuing impulses into the wave field")

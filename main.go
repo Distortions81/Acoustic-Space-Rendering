@@ -13,14 +13,14 @@ import (
 func main() {
 	flag.Parse()
 	if worldBoundaryAbsorbFlag != nil && *worldBoundaryAbsorbFlag {
-		boundaryReflect = 0
+		worldBoundaryReflect = 0
 	} else {
-		boundaryReflect = *worldBoundaryReflectFlag
+		worldBoundaryReflect = *worldBoundaryReflectFlag
 	}
-	if boundaryReflect < 0 {
-		boundaryReflect = 0
-	} else if boundaryReflect > 1 {
-		boundaryReflect = 1
+	if worldBoundaryReflect < 0 {
+		worldBoundaryReflect = 0
+	} else if worldBoundaryReflect > 1 {
+		worldBoundaryReflect = 1
 	}
 
 	roomWallSegments = defaultWallSegments

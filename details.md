@@ -144,24 +144,21 @@ main files and functions in the repository.
 
 ### Outer Grid Boundaries
 
-- The four outer edges of the grid act as reflective boundaries.
-- This behavior is implemented in the `boundary_accumulate` kernel inside
+- The four outer edges of the grid act like wall boundaries.
+- This behavior is implemented in the `wave_step` kernel inside
   `waveKernelSource`:
-  - For top and bottom rows, each boundary cell copies the value of the cell
-    just inside the domain and flips its sign.
-  - For left and right columns, it does the same horizontally.
-  - In all cases, the copied value is multiplied by a `reflect` coefficient
-    so the reflection can be made weaker or stronger.
-- `boundaryReflect` in `config.go` holds the configured reflection coefficient.
+  - For cells adjacent to the world boundary, the Laplacian treats the
+    out-of-bounds neighbor as a reflected “ghost” value derived from the cell
+    itself. This uses the same style of boundary condition as interior room
+    walls.
+- `worldBoundaryReflect` in `config.go` holds the configured reflection coefficient.
   - In `main.go`, `-world-boundary-absorb` and `-world-boundary-reflect` are
-    parsed and applied (with deprecated aliases supported).
-  - When `-world-boundary-absorb=true` (the default), `main.go` overrides
-    `boundaryReflect` to `0`, making the outer boundary absorbing.
+    parsed and stored into `worldBoundaryReflect`.
+  - When `-world-boundary-absorb=true` (the default), `main.go` sets
+    `worldBoundaryReflect` to `0`, making the world boundary absorbing.
 - After each call to `wave_step`, `openCLWaveSolver.runBoundaryAccumulate`
-  runs `boundary_accumulate`:
-  - This enforces the boundary conditions.
-  - It also accumulates a scaled magnitude of the boundary values into a
-    separate accumulation buffer used for visualization.
+  runs `boundary_accumulate` to accumulate a scaled magnitude into a separate
+  accumulation buffer used for visualization.
 
 ## Visibility and Field‑of‑View Masking
 

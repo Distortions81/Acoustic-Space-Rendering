@@ -13,72 +13,73 @@ import (
 )
 
 type openCLWaveSolver struct {
-	context                 *cl.Context
-	queue                   *cl.CommandQueue
-	program                 *cl.Program
-	kernel                  *cl.Kernel
-	renderKernel            *cl.Kernel
-	sampleKernel            *cl.Kernel
-	applyImpulsesKernel     *cl.Kernel
-	boundaryAccumKernel     *cl.Kernel
-	currBuf                 *cl.MemObject
-	prevBuf                 *cl.MemObject
-	nextBuf                 *cl.MemObject
-	pixelBuf                *cl.MemObject
-	accumBuf                *cl.MemObject
-	earSampleBuf            *cl.MemObject
-	wallMaskBuf             *cl.MemObject
-	visibilityBuf           *cl.MemObject
-	impulseIndexBuf         *cl.MemObject
-	impulseValueBuf         *cl.MemObject
-	width                   int
-	height                  int
-	useFP16                 bool
-	elementBytes            int
-	wallMaskSynced          bool
-	deviceName              string
-	device                  *cl.Device
-	coldStart               bool
-	waveGlobal              []int
-	waveLocal               []int
-	boundCurr               *cl.MemObject
-	boundPrev               *cl.MemObject
-	boundNext               *cl.MemObject
-	hostPixels              []byte
-	hostWallMask            []byte
-	hostVisibility          []byte
-	hostEarSamples          []float32
-	hostEarSamplesHalf      []uint16
-	hostCenterMono          []float32
-	pixelMu                 sync.Mutex
-	pixelEvent              *cl.Event
-	uploadedVisibleGen      uint32
-	visibleMaskSynced       bool
-	lastRenderShowWalls     int32
-	lastRenderUseVisibility int32
-	lastRenderSource        *cl.MemObject
-	debugVerify             bool
-	debugScratch            []float32
-	debugScratch16          []uint16
-	impulseCurrIndices      []int32
-	impulseCurrValues       []float32
-	impulsePrevIndices      []int32
-	impulsePrevValues       []float32
-	hostCurrHalf            []uint16
-	hostPrevHalf            []uint16
-	hostNextHalf            []uint16
-	impulseCurrHalf         []uint16
-	impulsePrevHalf         []uint16
-	earLeftSample           float32
-	earRightSample          float32
-	centerSample            float32
-	lastSampleCount         int
-	lastDamp                float32
-	lastSpeed               float32
-	lastRoomWallReflect     float32
-	warnedCoeffClamp        bool
-	sampleIndexL            int32
-	sampleIndexR            int32
+	context                  *cl.Context
+	queue                    *cl.CommandQueue
+	program                  *cl.Program
+	kernel                   *cl.Kernel
+	renderKernel             *cl.Kernel
+	sampleKernel             *cl.Kernel
+	applyImpulsesKernel      *cl.Kernel
+	boundaryAccumKernel      *cl.Kernel
+	currBuf                  *cl.MemObject
+	prevBuf                  *cl.MemObject
+	nextBuf                  *cl.MemObject
+	pixelBuf                 *cl.MemObject
+	accumBuf                 *cl.MemObject
+	earSampleBuf             *cl.MemObject
+	wallMaskBuf              *cl.MemObject
+	visibilityBuf            *cl.MemObject
+	impulseIndexBuf          *cl.MemObject
+	impulseValueBuf          *cl.MemObject
+	width                    int
+	height                   int
+	useFP16                  bool
+	elementBytes             int
+	wallMaskSynced           bool
+	deviceName               string
+	device                   *cl.Device
+	coldStart                bool
+	waveGlobal               []int
+	waveLocal                []int
+	boundCurr                *cl.MemObject
+	boundPrev                *cl.MemObject
+	boundNext                *cl.MemObject
+	hostPixels               []byte
+	hostWallMask             []byte
+	hostVisibility           []byte
+	hostEarSamples           []float32
+	hostEarSamplesHalf       []uint16
+	hostCenterMono           []float32
+	pixelMu                  sync.Mutex
+	pixelEvent               *cl.Event
+	uploadedVisibleGen       uint32
+	visibleMaskSynced        bool
+	lastRenderShowWalls      int32
+	lastRenderUseVisibility  int32
+	lastRenderSource         *cl.MemObject
+	debugVerify              bool
+	debugScratch             []float32
+	debugScratch16           []uint16
+	impulseCurrIndices       []int32
+	impulseCurrValues        []float32
+	impulsePrevIndices       []int32
+	impulsePrevValues        []float32
+	hostCurrHalf             []uint16
+	hostPrevHalf             []uint16
+	hostNextHalf             []uint16
+	impulseCurrHalf          []uint16
+	impulsePrevHalf          []uint16
+	earLeftSample            float32
+	earRightSample           float32
+	centerSample             float32
+	lastSampleCount          int
+	lastDamp                 float32
+	lastSpeed                float32
+	lastWorldBoundaryReflect float32
+	lastRoomWallReflect      float32
+	warnedCoeffClamp         bool
+	sampleIndexL             int32
+	sampleIndexR             int32
 }
 
 type audioEmitterData struct {
@@ -104,6 +105,7 @@ __kernel void wave_step(
     const int height,
     const float damp,
     const float speed,
+    const float world_boundary_reflect,
     const float room_wall_reflect,
     __global const real_t* curr,
     __global const real_t* prev,
@@ -123,6 +125,7 @@ __kernel void wave_step(
         return;
     }
     if (x <= 0 || x >= width - 1 || y <= 0 || y >= height - 1) {
+        next_buffer[idx] = (real_t)0.0f;
         return;
     }
     int left = idx - 1;
@@ -131,6 +134,7 @@ __kernel void wave_step(
     int bottom = idx + width;
     const real_t damp_r = to_real(damp);
     const real_t speed_r = to_real(speed);
+    const real_t world_reflect_r = to_real(world_boundary_reflect);
     const real_t wall_reflect_r = to_real(room_wall_reflect);
     const real_t two = to_real(2.0f);
     const real_t four = to_real(4.0f);
@@ -139,16 +143,24 @@ __kernel void wave_step(
     real_t nR = curr[right];
     real_t nT = curr[top];
     real_t nB = curr[bottom];
-    if (wall_mask[left]) {
+    if (x == 1) {
+        nL = center * world_reflect_r;
+    } else if (wall_mask[left]) {
         nL = center * wall_reflect_r;
     }
-    if (wall_mask[right]) {
+    if (x == width - 2) {
+        nR = center * world_reflect_r;
+    } else if (wall_mask[right]) {
         nR = center * wall_reflect_r;
     }
-    if (wall_mask[top]) {
+    if (y == 1) {
+        nT = center * world_reflect_r;
+    } else if (wall_mask[top]) {
         nT = center * wall_reflect_r;
     }
-    if (wall_mask[bottom]) {
+    if (y == height - 2) {
+        nB = center * world_reflect_r;
+    } else if (wall_mask[bottom]) {
         nB = center * wall_reflect_r;
     }
     real_t laplacian = nL + nR + nT + nB - four * center;
@@ -245,9 +257,8 @@ __kernel void accumulate_frame(
 __kernel void boundary_accumulate(
     const int width,
     const int height,
-    const float reflect,
     const float scale,
-    __global real_t* buffer,
+    __global const real_t* buffer,
     __global real_t* accum)
 {
     if (width <= 0 || height <= 0) {
@@ -257,22 +268,6 @@ __kernel void boundary_accumulate(
     int size = width * height;
     if (idx >= size) {
         return;
-    }
-    int x = idx % width;
-    int y = idx / width;
-    const real_t reflect_r = to_real(reflect);
-    if (height > 1 && y == 0) {
-        int src = width + x;
-        buffer[idx] = -buffer[src] * reflect_r;
-    } else if (height > 1 && y == height - 1) {
-        int src = (height - 2) * width + x;
-        buffer[idx] = -buffer[src] * reflect_r;
-    } else if (width > 1 && x == 0) {
-        int src = y*width + 1;
-        buffer[idx] = -buffer[src] * reflect_r;
-    } else if (width > 1 && x == width - 1) {
-        int src = y*width + width - 2;
-        buffer[idx] = -buffer[src] * reflect_r;
     }
     float value = fabs(to_float(buffer[idx]));
     real_t scaled = to_real(value * scale);
@@ -655,6 +650,7 @@ func newOpenCLWaveSolver(width, height int) (*openCLWaveSolver, error) {
 		int32(height),
 		coeffs.DampPerStep,
 		coeffs.SpeedCoeff,
+		float32(worldBoundaryReflect),
 		float32(roomWallReflect),
 		solver.currBuf,
 		solver.prevBuf,
@@ -670,6 +666,7 @@ func newOpenCLWaveSolver(width, height int) (*openCLWaveSolver, error) {
 	}
 	solver.lastDamp = coeffs.DampPerStep
 	solver.lastSpeed = coeffs.SpeedCoeff
+	solver.lastWorldBoundaryReflect = float32(worldBoundaryReflect)
 	solver.lastRoomWallReflect = float32(roomWallReflect)
 	if err := solver.renderKernel.SetArgs(
 		int32(width),
@@ -925,7 +922,7 @@ func (s *openCLWaveSolver) sampleCenter(step int) error {
 }
 
 func (s *openCLWaveSolver) setEmitterArgs(index int32, value float32) error {
-	if err := s.kernel.SetArgInt32(9, index); err != nil {
+	if err := s.kernel.SetArgInt32(10, index); err != nil {
 		return err
 	}
 	return s.setEmitterValue(value)
@@ -934,26 +931,26 @@ func (s *openCLWaveSolver) setEmitterArgs(index int32, value float32) error {
 func (s *openCLWaveSolver) setEmitterValue(val float32) error {
 	if s.useFP16 {
 		half := float32ToFloat16Bits(val)
-		return s.kernel.SetArgUnsafe(10, int(unsafe.Sizeof(half)), unsafe.Pointer(&half))
+		return s.kernel.SetArgUnsafe(11, int(unsafe.Sizeof(half)), unsafe.Pointer(&half))
 	}
-	return s.kernel.SetArgFloat32(10, val)
+	return s.kernel.SetArgFloat32(11, val)
 }
 
 func (s *openCLWaveSolver) bindDynamicBuffers() error {
 	if s.boundCurr != s.currBuf {
-		if err := s.kernel.SetArgBuffer(5, s.currBuf); err != nil {
+		if err := s.kernel.SetArgBuffer(6, s.currBuf); err != nil {
 			return err
 		}
 		s.boundCurr = s.currBuf
 	}
 	if s.boundPrev != s.prevBuf {
-		if err := s.kernel.SetArgBuffer(6, s.prevBuf); err != nil {
+		if err := s.kernel.SetArgBuffer(7, s.prevBuf); err != nil {
 			return err
 		}
 		s.boundPrev = s.prevBuf
 	}
 	if s.boundNext != s.nextBuf {
-		if err := s.kernel.SetArgBuffer(7, s.nextBuf); err != nil {
+		if err := s.kernel.SetArgBuffer(8, s.nextBuf); err != nil {
 			return err
 		}
 		s.boundNext = s.nextBuf
@@ -980,12 +977,25 @@ func (s *openCLWaveSolver) setWaveCoefficients(damp, speed float32) error {
 	return nil
 }
 
+func (s *openCLWaveSolver) setWorldBoundaryReflect(reflect float32) error {
+	if s.kernel == nil {
+		return nil
+	}
+	if reflect != s.lastWorldBoundaryReflect {
+		if err := s.kernel.SetArgFloat32(4, reflect); err != nil {
+			return err
+		}
+		s.lastWorldBoundaryReflect = reflect
+	}
+	return nil
+}
+
 func (s *openCLWaveSolver) setRoomWallReflect(reflect float32) error {
 	if s.kernel == nil {
 		return nil
 	}
 	if reflect != s.lastRoomWallReflect {
-		if err := s.kernel.SetArgFloat32(4, reflect); err != nil {
+		if err := s.kernel.SetArgFloat32(5, reflect); err != nil {
 			return err
 		}
 		s.lastRoomWallReflect = reflect
@@ -1046,7 +1056,7 @@ func (s *openCLWaveSolver) refreshVisibilityMask(stamp []uint32, gen uint32) err
 	return nil
 }
 
-func (s *openCLWaveSolver) runBoundaryAccumulate(global []int, scale float32, reflect float32) error {
+func (s *openCLWaveSolver) runBoundaryAccumulate(global []int, scale float32) error {
 	if s.boundaryAccumKernel == nil || s.currBuf == nil || s.accumBuf == nil {
 		return nil
 	}
@@ -1059,16 +1069,13 @@ func (s *openCLWaveSolver) runBoundaryAccumulate(global []int, scale float32, re
 	if err := s.boundaryAccumKernel.SetArgInt32(1, int32(s.height)); err != nil {
 		return fmt.Errorf("setting boundary accumulate height: %w", err)
 	}
-	if err := s.boundaryAccumKernel.SetArgFloat32(2, reflect); err != nil {
-		return fmt.Errorf("setting boundary accumulate reflect: %w", err)
-	}
-	if err := s.boundaryAccumKernel.SetArgFloat32(3, scale); err != nil {
+	if err := s.boundaryAccumKernel.SetArgFloat32(2, scale); err != nil {
 		return fmt.Errorf("setting boundary accumulate scale: %w", err)
 	}
-	if err := s.boundaryAccumKernel.SetArgBuffer(4, s.currBuf); err != nil {
+	if err := s.boundaryAccumKernel.SetArgBuffer(3, s.currBuf); err != nil {
 		return fmt.Errorf("binding boundary accumulate buffer: %w", err)
 	}
-	if err := s.boundaryAccumKernel.SetArgBuffer(5, s.accumBuf); err != nil {
+	if err := s.boundaryAccumKernel.SetArgBuffer(4, s.accumBuf); err != nil {
 		return fmt.Errorf("binding boundary accumulate accum: %w", err)
 	}
 	if _, err := s.queue.EnqueueNDRangeKernel(s.boundaryAccumKernel, nil, global, nil, nil); err != nil {
@@ -1134,6 +1141,9 @@ func (s *openCLWaveSolver) Step(field *waveField, walls []bool, steps int, walls
 	}
 	if err := s.setWaveCoefficients(coeffs.DampPerStep, coeffs.SpeedCoeff); err != nil {
 		return fmt.Errorf("setting wave coefficients: %w", err)
+	}
+	if err := s.setWorldBoundaryReflect(float32(worldBoundaryReflect)); err != nil {
+		return fmt.Errorf("setting world boundary reflect: %w", err)
 	}
 	if err := s.setRoomWallReflect(float32(roomWallReflect)); err != nil {
 		return fmt.Errorf("setting room wall reflect: %w", err)
@@ -1233,7 +1243,6 @@ func (s *openCLWaveSolver) Step(field *waveField, walls []bool, steps int, walls
 		s.earLeftSample = 0
 		s.earRightSample = 0
 	}
-	reflect32 := float32(boundaryReflect)
 	if err := s.setEmitterArgs(emitterIndex, 0); err != nil {
 		return fmt.Errorf("setting emitter args: %w", err)
 	}
@@ -1253,7 +1262,7 @@ func (s *openCLWaveSolver) Step(field *waveField, walls []bool, steps int, walls
 		}
 		s.prevBuf, s.currBuf, s.nextBuf = s.currBuf, s.nextBuf, s.prevBuf
 		if size > 0 {
-			if err := s.runBoundaryAccumulate(accumGlobal, scale, reflect32); err != nil {
+			if err := s.runBoundaryAccumulate(accumGlobal, scale); err != nil {
 				return err
 			}
 			if s.sampleKernel != nil && s.earSampleBuf != nil {

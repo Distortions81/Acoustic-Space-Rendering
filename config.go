@@ -6,7 +6,7 @@ import "time"
 // application. These values define the grid size and timing for
 // the acoustic wave simulation.
 const (
-	w, h                     = 800, 800
+	w, h                     = 640, 640
 	windowScale              = 2
 	defaultCellSizeM         = 0.0125
 	defaultAirTempC          = 20.0
@@ -24,7 +24,7 @@ const (
 	earOffsetCells           = 5
 	defaultBoundaryReflect   = 0.98
 	defaultAirAbsDbPerM      = 0.01
-	visualGamma              = 1.25
+	visualGamma              = 1.5
 	stepImpulseStrength      = 20.0
 	defaultWallSegments      = 10
 	defaultWallMinLenM       = 1.0
@@ -38,7 +38,7 @@ const (
 	audioPlayerBufferLatency = 40 * time.Millisecond
 )
 
-var boundaryReflect = defaultBoundaryReflect
+var worldBoundaryReflect = defaultBoundaryReflect
 
 var (
 	roomWallSegments      = defaultWallSegments
