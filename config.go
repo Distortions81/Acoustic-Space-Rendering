@@ -7,7 +7,7 @@ import "time"
 // the acoustic wave simulation.
 const (
 	w, h                     = 950, 950
-	windowScale              = 2
+	windowScale              = 1
 	defaultWorldWidthFeet    = 100
 	defaultCellSizeM         = defaultWorldWidthFeet * 0.3048 / float64(w)
 	defaultAirTempC          = 20.0
@@ -32,7 +32,7 @@ const (
 	defaultWallThicknessM    = 0.15
 	defaultWallThicknessJitM = 0.10
 	defaultWallExclusionM    = 0.5
-	defaultRoomWallMaterial  = "concrete"
+	defaultRoomWallMaterial  = "brick"
 	defaultRoomWallReflect   = 0.90
 	pgoRecordDuration        = 15 * time.Second
 	sampleCaptureLogInterval = 500 * time.Millisecond
