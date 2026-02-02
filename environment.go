@@ -114,7 +114,6 @@ func (g *Game) generateWalls() {
 			cy += dy
 		}
 	}
-	g.lastVisCX, g.lastVisCY = -1, -1
 	g.wallsDirty = true
 }
 
@@ -138,7 +137,6 @@ func (g *Game) trySetWall(x, y int) {
 	}
 	idx := y*w + x
 	g.walls[idx] = true
-	g.field.zeroCell(x, y)
 }
 
 // isWall reports whether the coordinates reference a wall cell.

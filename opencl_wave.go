@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"math"
 	"strings"
 	"sync"
 	"unsafe"
@@ -18,17 +17,12 @@ type openCLWaveSolver struct {
 	program                  *cl.Program
 	kernel                   *cl.Kernel
 	renderKernel             *cl.Kernel
-	applyImpulsesKernel      *cl.Kernel
 	currBuf                  *cl.MemObject
 	prevBuf                  *cl.MemObject
 	nextBuf                  *cl.MemObject
 	pixelBuf                 *cl.MemObject
-	accumBuf                 *cl.MemObject
 	earSampleBuf             *cl.MemObject
 	wallMaskBuf              *cl.MemObject
-	visibilityBuf            *cl.MemObject
-	impulseIndexBuf          *cl.MemObject
-	impulseValueBuf          *cl.MemObject
 	width                    int
 	height                   int
 	useFP16                  bool
@@ -44,48 +38,28 @@ type openCLWaveSolver struct {
 	boundNext                *cl.MemObject
 	hostPixels               []byte
 	hostWallMask             []byte
-	hostVisibility           []byte
 	hostEarSamples           []float32
 	hostEarSamplesHalf       []uint16
-	hostCenterMono           []float32
 	pixelMu                  sync.Mutex
 	pixelEvent               *cl.Event
-	uploadedVisibleGen       uint32
-	visibleMaskSynced        bool
 	lastRenderShowWalls      int32
-	lastRenderUseVisibility  int32
-	lastRenderSource         *cl.MemObject
-	debugVerify              bool
-	debugScratch             []float32
-	debugScratch16           []uint16
-	impulseCurrIndices       []int32
-	impulseCurrValues        []float32
-	impulsePrevIndices       []int32
-	impulsePrevValues        []float32
 	hostCurrHalf             []uint16
 	hostPrevHalf             []uint16
 	hostNextHalf             []uint16
-	impulseCurrHalf          []uint16
-	impulsePrevHalf          []uint16
 	earLeftSample            float32
 	earRightSample           float32
-	centerSample             float32
 	lastSampleCount          int
 	lastDamp                 float32
 	lastSpeed                float32
 	lastWorldBoundaryReflect float32
 	lastRoomWallReflect      float32
 	warnedCoeffClamp         bool
-	sampleIndexL             int32
-	sampleIndexR             int32
 }
 
 type audioEmitterData struct {
 	index   int32
 	samples []float32
 }
-
-const verifyTolerance = 1e-4
 
 const waveKernelSource = `#ifdef USE_FP16
 #pragma OPENCL EXTENSION cl_khr_fp16 : enable
@@ -109,9 +83,6 @@ __kernel void wave_step(
     __global const real_t* prev,
     __global real_t* next_buffer,
     __global const uchar* wall_mask,
-    __global real_t* accum,
-    const float accum_scale,
-    const int do_accum,
     __global real_t* ear_samples,
     const int ear_sample_size,
     const int left_index,
@@ -179,9 +150,6 @@ __kernel void wave_step(
         int adx = abs(dx);
         int ady = abs(dy);
         if (adx <= 1 && ady <= 1) {
-            // Distribute the source across a 3x3 neighborhood to reduce wideband
-            // injection artifacts. Binomial weights sum to 1:
-            // [1 2 1] ⊗ [1 2 1] / 16.
             int wx = (adx == 0) ? 2 : 1;
             int wy = (ady == 0) ? 2 : 1;
             real_t weight = to_real((float)(wx * wy) * 0.0625f);
@@ -189,11 +157,6 @@ __kernel void wave_step(
         }
     }
     next_buffer[idx] = next_val;
-    if (do_accum) {
-        float value = fabs(to_float(next_val));
-        float scaled = value * accum_scale;
-        accum[idx] += to_real(scaled);
-    }
     if (step_index >= 0 && ear_samples && ear_sample_size > 0) {
         int base = step_index * 2;
         if (left_index >= 0 && left_index < ear_sample_size && idx == left_index) {
@@ -205,20 +168,6 @@ __kernel void wave_step(
     }
 }
 
-__kernel void apply_impulses(
-    const int count,
-    __global const int* indices,
-    __global const real_t* values,
-    __global real_t* buffer)
-{
-    int gid = get_global_id(0);
-    if (gid >= count) {
-        return;
-    }
-    int idx = indices[gid];
-    buffer[idx] = values[gid];
-}
-
 __kernel void render_intensity(
     const int width,
     const int height,
@@ -226,8 +175,6 @@ __kernel void render_intensity(
     const float gamma,
     const int show_walls,
     __global const uchar* wall_mask,
-    const int use_visibility,
-    __global const uchar* visibility_mask,
     __global uchar4* pixels)
 {
     int idx = get_global_id(0);
@@ -242,13 +189,6 @@ __kernel void render_intensity(
     float corrected = pow(brightness, gammaRecip);
     uchar intensity = (uchar)(corrected * 255.0f);
     uchar4 color = (uchar4)(intensity, intensity, intensity, (uchar)255);
-    if (use_visibility) {
-        if (!visibility_mask[idx]) {
-            color.x = 0;
-            color.y = 0;
-            color.z = 0;
-        }
-    }
     if (show_walls) {
         if (wall_mask[idx]) {
             color.x = 30;
@@ -355,20 +295,10 @@ func newOpenCLWaveSolver(width, height int) (*openCLWaveSolver, error) {
 		context.Release()
 		return nil, fmt.Errorf("creating render kernel: %w", err)
 	}
-	applyImpulsesKernel, err := program.CreateKernel("apply_impulses")
-	if err != nil {
-		renderKernel.Release()
-		kernel.Release()
-		program.Release()
-		queue.Release()
-		context.Release()
-		return nil, fmt.Errorf("creating impulse kernel: %w", err)
-	}
 	size := width * height
 	byteSize := size * elementBytes
 	currBuf, err := context.CreateEmptyBuffer(cl.MemReadOnly, byteSize)
 	if err != nil {
-		applyImpulsesKernel.Release()
 		renderKernel.Release()
 		kernel.Release()
 		program.Release()
@@ -379,7 +309,6 @@ func newOpenCLWaveSolver(width, height int) (*openCLWaveSolver, error) {
 	prevBuf, err := context.CreateEmptyBuffer(cl.MemReadOnly, byteSize)
 	if err != nil {
 		currBuf.Release()
-		applyImpulsesKernel.Release()
 		renderKernel.Release()
 		kernel.Release()
 		program.Release()
@@ -391,7 +320,6 @@ func newOpenCLWaveSolver(width, height int) (*openCLWaveSolver, error) {
 	if err != nil {
 		prevBuf.Release()
 		currBuf.Release()
-		applyImpulsesKernel.Release()
 		renderKernel.Release()
 		kernel.Release()
 		program.Release()
@@ -404,7 +332,6 @@ func newOpenCLWaveSolver(width, height int) (*openCLWaveSolver, error) {
 		nextBuf.Release()
 		prevBuf.Release()
 		currBuf.Release()
-		applyImpulsesKernel.Release()
 		renderKernel.Release()
 		kernel.Release()
 		program.Release()
@@ -412,27 +339,12 @@ func newOpenCLWaveSolver(width, height int) (*openCLWaveSolver, error) {
 		context.Release()
 		return nil, fmt.Errorf("allocating pixel buffer: %w", err)
 	}
-	accumBuf, err := context.CreateEmptyBuffer(cl.MemReadWrite, byteSize)
-	if err != nil {
-		pixelBuf.Release()
-		nextBuf.Release()
-		prevBuf.Release()
-		currBuf.Release()
-		applyImpulsesKernel.Release()
-		renderKernel.Release()
-		kernel.Release()
-		program.Release()
-		queue.Release()
-		context.Release()
-		return nil, fmt.Errorf("allocating accumulation buffer: %w", err)
-	}
 	wallMaskBuf, err := context.CreateEmptyBuffer(cl.MemReadOnly, size)
 	if err != nil {
 		pixelBuf.Release()
 		nextBuf.Release()
 		prevBuf.Release()
 		currBuf.Release()
-		applyImpulsesKernel.Release()
 		renderKernel.Release()
 		kernel.Release()
 		program.Release()
@@ -440,115 +352,47 @@ func newOpenCLWaveSolver(width, height int) (*openCLWaveSolver, error) {
 		context.Release()
 		return nil, fmt.Errorf("allocating wall mask buffer: %w", err)
 	}
-	visibilityBuf, err := context.CreateEmptyBuffer(cl.MemReadOnly, size)
-	if err != nil {
-		wallMaskBuf.Release()
-		pixelBuf.Release()
-		accumBuf.Release()
-		nextBuf.Release()
-		prevBuf.Release()
-		currBuf.Release()
-		applyImpulsesKernel.Release()
-		renderKernel.Release()
-		kernel.Release()
-		program.Release()
-		queue.Release()
-		context.Release()
-		return nil, fmt.Errorf("allocating visibility buffer: %w", err)
-	}
-	impulseIndexBuf, err := context.CreateEmptyBuffer(cl.MemReadOnly, size*int(unsafe.Sizeof(int32(0))))
-	if err != nil {
-		visibilityBuf.Release()
-		wallMaskBuf.Release()
-		pixelBuf.Release()
-		accumBuf.Release()
-		nextBuf.Release()
-		prevBuf.Release()
-		currBuf.Release()
-		applyImpulsesKernel.Release()
-		renderKernel.Release()
-		kernel.Release()
-		program.Release()
-		queue.Release()
-		context.Release()
-		return nil, fmt.Errorf("allocating impulse index buffer: %w", err)
-	}
-	impulseValueBuf, err := context.CreateEmptyBuffer(cl.MemReadOnly, size*elementBytes)
-	if err != nil {
-		impulseIndexBuf.Release()
-		visibilityBuf.Release()
-		wallMaskBuf.Release()
-		pixelBuf.Release()
-		accumBuf.Release()
-		nextBuf.Release()
-		prevBuf.Release()
-		currBuf.Release()
-		applyImpulsesKernel.Release()
-		renderKernel.Release()
-		kernel.Release()
-		program.Release()
-		queue.Release()
-		context.Release()
-		return nil, fmt.Errorf("allocating impulse value buffer: %w", err)
-	}
 
-	var earSampleBuf *cl.MemObject
-	if captureStepSamplesFlag != nil && *captureStepSamplesFlag {
-		earSampleBuf, err = context.CreateEmptyBuffer(cl.MemReadWrite, maxSimMultiplier*2*elementBytes)
-		if err != nil {
-			impulseValueBuf.Release()
-			impulseIndexBuf.Release()
-			visibilityBuf.Release()
-			wallMaskBuf.Release()
-			pixelBuf.Release()
-			accumBuf.Release()
-			nextBuf.Release()
-			prevBuf.Release()
-			currBuf.Release()
-			applyImpulsesKernel.Release()
-			renderKernel.Release()
-			kernel.Release()
-			program.Release()
-			queue.Release()
-			context.Release()
-			return nil, fmt.Errorf("allocating ear sample buffer: %w", err)
-		}
+	earSampleBuf, err := context.CreateEmptyBuffer(cl.MemReadWrite, maxSimMultiplier*2*elementBytes)
+	if err != nil {
+		wallMaskBuf.Release()
+		pixelBuf.Release()
+		nextBuf.Release()
+		prevBuf.Release()
+		currBuf.Release()
+		renderKernel.Release()
+		kernel.Release()
+		program.Release()
+		queue.Release()
+		context.Release()
+		return nil, fmt.Errorf("allocating ear sample buffer: %w", err)
 	}
 
 	waveGlobal, waveLocal := computeWaveKernelWorkSizes(width, height, kernel, device)
 	solver := &openCLWaveSolver{
-		context:                 context,
-		queue:                   queue,
-		program:                 program,
-		kernel:                  kernel,
-		renderKernel:            renderKernel,
-		applyImpulsesKernel:     applyImpulsesKernel,
-		currBuf:                 currBuf,
-		prevBuf:                 prevBuf,
-		nextBuf:                 nextBuf,
-		pixelBuf:                pixelBuf,
-		accumBuf:                accumBuf,
-		earSampleBuf:            earSampleBuf,
-		wallMaskBuf:             wallMaskBuf,
-		visibilityBuf:           visibilityBuf,
-		impulseIndexBuf:         impulseIndexBuf,
-		impulseValueBuf:         impulseValueBuf,
-		width:                   width,
-		height:                  height,
-		useFP16:                 useFP16,
-		elementBytes:            elementBytes,
-		deviceName:              device.Name(),
-		device:                  device,
-		waveGlobal:              waveGlobal,
-		waveLocal:               waveLocal,
-		coldStart:               true,
-		hostPixels:              make([]byte, size*4),
-		hostWallMask:            make([]byte, size),
-		hostVisibility:          make([]byte, size),
-		lastRenderShowWalls:     -1,
-		lastRenderUseVisibility: -1,
-		lastRenderSource:        accumBuf,
-		debugVerify:             verifyOpenCLSyncFlag != nil && *verifyOpenCLSyncFlag,
+		context:             context,
+		queue:               queue,
+		program:             program,
+		kernel:              kernel,
+		renderKernel:        renderKernel,
+		currBuf:             currBuf,
+		prevBuf:             prevBuf,
+		nextBuf:             nextBuf,
+		pixelBuf:            pixelBuf,
+		earSampleBuf:        earSampleBuf,
+		wallMaskBuf:         wallMaskBuf,
+		width:               width,
+		height:              height,
+		useFP16:             useFP16,
+		elementBytes:        elementBytes,
+		deviceName:          device.Name(),
+		device:              device,
+		waveGlobal:          waveGlobal,
+		waveLocal:           waveLocal,
+		coldStart:           true,
+		hostPixels:          make([]byte, size*4),
+		hostWallMask:        make([]byte, size),
+		lastRenderShowWalls: -1,
 	}
 
 	precision := "fp32"
@@ -562,6 +406,9 @@ func newOpenCLWaveSolver(width, height int) (*openCLWaveSolver, error) {
 		solver.Close()
 		return nil, fmt.Errorf("computing wave coefficients: %w", err)
 	}
+	// Kernel args: width, height, damp, speed, world_boundary_reflect, room_wall_reflect,
+	//              curr, prev, next, wall_mask, ear_samples, ear_sample_size,
+	//              left_index, right_index, step_index, emitter_index, emitter_value
 	if err := solver.kernel.SetArgs(
 		int32(width),
 		int32(height),
@@ -573,10 +420,7 @@ func newOpenCLWaveSolver(width, height int) (*openCLWaveSolver, error) {
 		solver.prevBuf,
 		solver.nextBuf,
 		solver.wallMaskBuf,
-		solver.accumBuf,
-		float32(0),
-		int32(0),
-		solver.accumBuf,
+		solver.earSampleBuf,
 		int32(size),
 		int32(-1),
 		int32(-1),
@@ -597,12 +441,10 @@ func newOpenCLWaveSolver(width, height int) (*openCLWaveSolver, error) {
 	if err := solver.renderKernel.SetArgs(
 		int32(width),
 		int32(height),
-		solver.accumBuf,
+		solver.currBuf,
 		float32(visualGamma),
 		int32(0),
 		solver.wallMaskBuf,
-		int32(0),
-		solver.visibilityBuf,
 		solver.pixelBuf,
 	); err != nil {
 		solver.Close()
@@ -610,31 +452,6 @@ func newOpenCLWaveSolver(width, height int) (*openCLWaveSolver, error) {
 	}
 
 	return solver, nil
-}
-
-// audio sampling helpers removed
-
-func (s *openCLWaveSolver) ensureDebugScratch(size int) []float32 {
-	if cap(s.debugScratch) < size {
-		s.debugScratch = make([]float32, size)
-	}
-	s.debugScratch = s.debugScratch[:size]
-	return s.debugScratch
-}
-
-func (s *openCLWaveSolver) ensureDebugScratch16(size int) []uint16 {
-	if cap(s.debugScratch16) < size {
-		s.debugScratch16 = make([]uint16, size)
-	}
-	s.debugScratch16 = s.debugScratch16[:size]
-	return s.debugScratch16
-}
-
-func ensureInt32Slice(buf []int32, size int) []int32 {
-	if cap(buf) < size {
-		return make([]int32, size)
-	}
-	return buf[:size]
 }
 
 func ensureFloat32Slice(buf []float32, size int) []float32 {
@@ -702,73 +519,6 @@ func roundUp(value, align int) int {
 	return value + align - remainder
 }
 
-func (s *openCLWaveSolver) verifyBufferMatchesSlice(buf *cl.MemObject, host []float32, label string) error {
-	if len(host) == 0 {
-		return nil
-	}
-	scratch := s.ensureDebugScratch(len(host))
-	if s.useFP16 {
-		raw := s.ensureDebugScratch16(len(host))
-		if _, err := s.queue.EnqueueReadBuffer(buf, true, 0, len(raw)*s.elementBytes, unsafe.Pointer(&raw[0]), nil); err != nil {
-			return fmt.Errorf("reading %s for verification: %w", label, err)
-		}
-		float16ToFloat32(scratch, raw)
-	} else {
-		if _, err := s.queue.EnqueueReadBufferFloat32(buf, true, 0, scratch, nil); err != nil {
-			return fmt.Errorf("reading %s for verification: %w", label, err)
-		}
-	}
-	for i, hv := range host {
-		if diff := math.Abs(float64(scratch[i] - hv)); diff > verifyTolerance {
-			return fmt.Errorf("%s mismatch at index %d: device=%f host=%f diff=%f", label, i, scratch[i], hv, diff)
-		}
-	}
-	return nil
-}
-
-func (s *openCLWaveSolver) dispatchImpulses(target *cl.MemObject, indices []int32, values []float32, halfScratch *[]uint16) error {
-	if len(indices) == 0 {
-		return nil
-	}
-	if len(values) != len(indices) {
-		return fmt.Errorf("impulse data mismatch: %d indices vs %d values", len(indices), len(values))
-	}
-	byteIdx := len(indices) * int(unsafe.Sizeof(int32(0)))
-	if _, err := s.queue.EnqueueWriteBuffer(s.impulseIndexBuf, false, 0, byteIdx, unsafe.Pointer(&indices[0]), nil); err != nil {
-		return fmt.Errorf("uploading impulse indices: %w", err)
-	}
-	if len(values) > 0 {
-		byteVal := len(values) * s.elementBytes
-		if s.useFP16 {
-			*halfScratch = ensureUint16Slice(*halfScratch, len(values))
-			float32ToFloat16(*halfScratch, values)
-			if _, err := s.queue.EnqueueWriteBuffer(s.impulseValueBuf, false, 0, byteVal, unsafe.Pointer(&(*halfScratch)[0]), nil); err != nil {
-				return fmt.Errorf("uploading impulse values: %w", err)
-			}
-		} else {
-			if _, err := s.queue.EnqueueWriteBuffer(s.impulseValueBuf, false, 0, byteVal, unsafe.Pointer(&values[0]), nil); err != nil {
-				return fmt.Errorf("uploading impulse values: %w", err)
-			}
-		}
-	}
-	if err := s.applyImpulsesKernel.SetArgInt32(0, int32(len(indices))); err != nil {
-		return fmt.Errorf("setting impulse count: %w", err)
-	}
-	if err := s.applyImpulsesKernel.SetArgBuffer(1, s.impulseIndexBuf); err != nil {
-		return fmt.Errorf("binding impulse indices: %w", err)
-	}
-	if err := s.applyImpulsesKernel.SetArgBuffer(2, s.impulseValueBuf); err != nil {
-		return fmt.Errorf("binding impulse values: %w", err)
-	}
-	if err := s.applyImpulsesKernel.SetArgBuffer(3, target); err != nil {
-		return fmt.Errorf("binding impulse target: %w", err)
-	}
-	if _, err := s.queue.EnqueueNDRangeKernel(s.applyImpulsesKernel, nil, []int{len(indices)}, nil, nil); err != nil {
-		return fmt.Errorf("dispatching impulse kernel: %w", err)
-	}
-	return nil
-}
-
 func (s *openCLWaveSolver) writeFieldBuffer(buf *cl.MemObject, data []float32, halfScratch *[]uint16) error {
 	if len(data) == 0 {
 		return nil
@@ -788,39 +538,8 @@ func (s *openCLWaveSolver) writeFieldBuffer(buf *cl.MemObject, data []float32, h
 	return nil
 }
 
-func (s *openCLWaveSolver) applyQueuedImpulses(field *waveField) error {
-	impulses := field.takeImpulses()
-	if len(impulses) == 0 {
-		return nil
-	}
-	count := len(impulses)
-	s.impulseCurrIndices = ensureInt32Slice(s.impulseCurrIndices, count)
-	s.impulseCurrValues = ensureFloat32Slice(s.impulseCurrValues, count)
-	s.impulsePrevIndices = ensureInt32Slice(s.impulsePrevIndices, count)
-	s.impulsePrevValues = ensureFloat32Slice(s.impulsePrevValues, count)
-	prevCount := 0
-	for i, imp := range impulses {
-		s.impulseCurrIndices[i] = imp.index
-		s.impulseCurrValues[i] = imp.value
-		if imp.applyPrev {
-			s.impulsePrevIndices[prevCount] = imp.index
-			s.impulsePrevValues[prevCount] = imp.value
-			prevCount++
-		}
-	}
-	s.impulsePrevIndices = s.impulsePrevIndices[:prevCount]
-	s.impulsePrevValues = s.impulsePrevValues[:prevCount]
-	if err := s.dispatchImpulses(s.currBuf, s.impulseCurrIndices, s.impulseCurrValues, &s.impulseCurrHalf); err != nil {
-		return err
-	}
-	if err := s.dispatchImpulses(s.prevBuf, s.impulsePrevIndices, s.impulsePrevValues, &s.impulsePrevHalf); err != nil {
-		return err
-	}
-	return nil
-}
-
 func (s *openCLWaveSolver) setEmitterArgs(index int32, value float32) error {
-	if err := s.kernel.SetArgInt32(18, index); err != nil {
+	if err := s.kernel.SetArgInt32(15, index); err != nil {
 		return err
 	}
 	return s.setEmitterValue(value)
@@ -829,52 +548,29 @@ func (s *openCLWaveSolver) setEmitterArgs(index int32, value float32) error {
 func (s *openCLWaveSolver) setEmitterValue(val float32) error {
 	if s.useFP16 {
 		half := float32ToFloat16Bits(val)
-		return s.kernel.SetArgUnsafe(19, int(unsafe.Sizeof(half)), unsafe.Pointer(&half))
+		return s.kernel.SetArgUnsafe(16, int(unsafe.Sizeof(half)), unsafe.Pointer(&half))
 	}
-	return s.kernel.SetArgFloat32(19, val)
+	return s.kernel.SetArgFloat32(16, val)
 }
 
-func (s *openCLWaveSolver) setAccumArgs(doAccum bool, scale float32) error {
-	if s.kernel == nil || s.accumBuf == nil {
-		return nil
-	}
-	flag := int32(0)
-	if doAccum {
-		flag = 1
-	}
-	if err := s.kernel.SetArgBuffer(10, s.accumBuf); err != nil {
-		return err
-	}
-	if err := s.kernel.SetArgFloat32(11, scale); err != nil {
-		return err
-	}
-	return s.kernel.SetArgInt32(12, flag)
-}
-
-func (s *openCLWaveSolver) setEarSampleArgs(buf *cl.MemObject, size int32, left int32, right int32) error {
+func (s *openCLWaveSolver) setEarSampleArgs(size int32, left int32, right int32) error {
 	if s.kernel == nil {
 		return nil
 	}
-	if buf == nil {
-		buf = s.accumBuf
-	}
-	if err := s.kernel.SetArgBuffer(13, buf); err != nil {
+	if err := s.kernel.SetArgInt32(11, size); err != nil {
 		return err
 	}
-	if err := s.kernel.SetArgInt32(14, size); err != nil {
+	if err := s.kernel.SetArgInt32(12, left); err != nil {
 		return err
 	}
-	if err := s.kernel.SetArgInt32(15, left); err != nil {
-		return err
-	}
-	return s.kernel.SetArgInt32(16, right)
+	return s.kernel.SetArgInt32(13, right)
 }
 
 func (s *openCLWaveSolver) setStepIndex(step int32) error {
 	if s.kernel == nil {
 		return nil
 	}
-	return s.kernel.SetArgInt32(17, step)
+	return s.kernel.SetArgInt32(14, step)
 }
 
 func (s *openCLWaveSolver) bindDynamicBuffers() error {
@@ -968,36 +664,7 @@ func (s *openCLWaveSolver) refreshWallMask(walls []bool) error {
 	return nil
 }
 
-func (s *openCLWaveSolver) refreshVisibilityMask(stamp []uint32, gen uint32) error {
-	size := s.width * s.height
-	if len(stamp) != size {
-		s.visibleMaskSynced = false
-		return nil
-	}
-	if s.visibleMaskSynced && s.uploadedVisibleGen == gen {
-		return nil
-	}
-	for i, value := range stamp {
-		if value == gen {
-			s.hostVisibility[i] = 1
-		} else {
-			s.hostVisibility[i] = 0
-		}
-	}
-	if size == 0 {
-		s.visibleMaskSynced = true
-		s.uploadedVisibleGen = gen
-		return nil
-	}
-	if _, err := s.queue.EnqueueWriteBuffer(s.visibilityBuf, false, 0, size, unsafe.Pointer(&s.hostVisibility[0]), nil); err != nil {
-		return fmt.Errorf("writing visibility buffer: %w", err)
-	}
-	s.visibleMaskSynced = true
-	s.uploadedVisibleGen = gen
-	return nil
-}
-
-func (s *openCLWaveSolver) setRenderFlags(showWalls bool, useVisibility bool) error {
+func (s *openCLWaveSolver) setRenderFlags(showWalls bool) error {
 	show := int32(0)
 	if showWalls {
 		show = 1
@@ -1008,38 +675,10 @@ func (s *openCLWaveSolver) setRenderFlags(showWalls bool, useVisibility bool) er
 		}
 		s.lastRenderShowWalls = show
 	}
-	useVis := int32(0)
-	if useVisibility {
-		useVis = 1
-	}
-	if s.lastRenderUseVisibility != useVis {
-		if err := s.renderKernel.SetArgInt32(6, useVis); err != nil {
-			return err
-		}
-		s.lastRenderUseVisibility = useVis
-	}
 	return nil
 }
 
-func (s *openCLWaveSolver) setRenderSource(lastFrameOnly bool) error {
-	source := s.accumBuf
-	if lastFrameOnly {
-		source = s.currBuf
-	}
-	if source == nil {
-		return errors.New("render buffer is not available")
-	}
-	if s.lastRenderSource == source {
-		return nil
-	}
-	if err := s.renderKernel.SetArgBuffer(2, source); err != nil {
-		return err
-	}
-	s.lastRenderSource = source
-	return nil
-}
-
-func (s *openCLWaveSolver) Step(field *waveField, walls []bool, steps int, dtSeconds float64, wallsDirty bool, showWalls bool, lastFrameOnly bool, occludeLOS bool, visibleStamp []uint32, visibleGen uint32, leftIndex int32, rightIndex int32, emitter *audioEmitterData) error {
+func (s *openCLWaveSolver) Step(field *waveField, walls []bool, steps int, dtSeconds float64, wallsDirty bool, showWalls bool, leftIndex int32, rightIndex int32, emitter *audioEmitterData) error {
 	if steps <= 0 {
 		return nil
 	}
@@ -1075,8 +714,6 @@ func (s *openCLWaveSolver) Step(field *waveField, walls []bool, steps int, dtSec
 	if rightIndex < 0 || int(rightIndex) >= size {
 		rightIndex = defaultIndex
 	}
-	s.sampleIndexL = leftIndex
-	s.sampleIndexR = rightIndex
 	var emitterIndex int32 = -1
 	var emitterSamples []float32
 	if emitter != nil && emitter.index >= 0 && len(emitter.samples) > 0 {
@@ -1096,17 +733,6 @@ func (s *openCLWaveSolver) Step(field *waveField, walls []bool, steps int, dtSec
 			return fmt.Errorf("initializing next buffer: %w", err)
 		}
 	}
-	if err := s.applyQueuedImpulses(field); err != nil {
-		return fmt.Errorf("applying impulses: %w", err)
-	}
-	if s.debugVerify {
-		if err := s.verifyBufferMatchesSlice(s.currBuf, field.curr, "pre-step curr"); err != nil {
-			return err
-		}
-		if err := s.verifyBufferMatchesSlice(s.prevBuf, field.prev, "pre-step prev"); err != nil {
-			return err
-		}
-	}
 	if !s.wallMaskSynced || wallsDirty {
 		if err := s.refreshWallMask(walls); err != nil {
 			return err
@@ -1115,28 +741,7 @@ func (s *openCLWaveSolver) Step(field *waveField, walls []bool, steps int, dtSec
 	if showWalls && len(walls) != size {
 		showWalls = false
 	}
-	useVisibility := false
-	if occludeLOS && len(visibleStamp) == size {
-		if err := s.refreshVisibilityMask(visibleStamp, visibleGen); err != nil {
-			return err
-		}
-		useVisibility = true
-	}
 
-	doAccum := !lastFrameOnly
-	if doAccum && size > 0 {
-		var zero32 float32
-		var zero16 uint16
-		pattern := unsafe.Pointer(&zero32)
-		if s.elementBytes == 2 {
-			pattern = unsafe.Pointer(&zero16)
-		}
-		byteSize := size * s.elementBytes
-		if _, err := s.queue.EnqueueFillBuffer(s.accumBuf, pattern, s.elementBytes, 0, byteSize, nil); err != nil {
-			return fmt.Errorf("clearing accumulation buffer: %w", err)
-		}
-	}
-	accumGlobal := []int{size}
 	waveGlobal := s.waveGlobal
 	if len(waveGlobal) != 2 {
 		waveGlobal = []int{s.width, s.height}
@@ -1145,29 +750,21 @@ func (s *openCLWaveSolver) Step(field *waveField, walls []bool, steps int, dtSec
 	if len(waveLocal) != 0 && len(waveLocal) != len(waveGlobal) {
 		waveLocal = nil
 	}
-	scale := float32(0)
-	if doAccum && steps > 0 {
-		scale = 1 / float32(steps)
-	}
-	if err := s.setAccumArgs(doAccum, scale); err != nil {
-		return fmt.Errorf("setting accumulation args: %w", err)
-	}
 
-	if steps > 0 && s.earSampleBuf != nil {
+	if steps > 0 {
 		s.lastSampleCount = steps
 		s.hostEarSamples = ensureFloat32Slice(s.hostEarSamples, steps*2)
 		if s.useFP16 {
 			s.hostEarSamplesHalf = ensureUint16Slice(s.hostEarSamplesHalf, steps*2)
 		}
-		if err := s.setEarSampleArgs(s.earSampleBuf, int32(size), leftIndex, rightIndex); err != nil {
+		if err := s.setEarSampleArgs(int32(size), leftIndex, rightIndex); err != nil {
 			return fmt.Errorf("setting ear sample args: %w", err)
 		}
 	} else {
 		s.lastSampleCount = 0
-		s.centerSample = 0
 		s.earLeftSample = 0
 		s.earRightSample = 0
-		if err := s.setEarSampleArgs(s.accumBuf, int32(size), -1, -1); err != nil {
+		if err := s.setEarSampleArgs(int32(size), -1, -1); err != nil {
 			return fmt.Errorf("clearing ear sample args: %w", err)
 		}
 	}
@@ -1193,7 +790,7 @@ func (s *openCLWaveSolver) Step(field *waveField, walls []bool, steps int, dtSec
 		}
 		s.prevBuf, s.currBuf, s.nextBuf = s.currBuf, s.nextBuf, s.prevBuf
 	}
-	if steps > 0 && s.earSampleBuf != nil {
+	if steps > 0 {
 		byteLen := steps * 2 * s.elementBytes
 		if s.useFP16 {
 			if _, err := s.queue.EnqueueReadBuffer(s.earSampleBuf, true, 0, byteLen, unsafe.Pointer(&s.hostEarSamplesHalf[0]), nil); err != nil {
@@ -1208,47 +805,17 @@ func (s *openCLWaveSolver) Step(field *waveField, walls []bool, steps int, dtSec
 		base := (steps - 1) * 2
 		s.earLeftSample = s.hostEarSamples[base]
 		s.earRightSample = s.hostEarSamples[base+1]
-		s.centerSample = 0.5 * (s.earLeftSample + s.earRightSample)
-	} else if steps > 0 && size > 0 && s.width > 0 && s.height > 0 {
-		// Fallback: sample a single center value from the current buffer when
-		// per-step sampling is disabled.
-		readOne := func(index int32) float32 {
-			offset := int(index) * s.elementBytes
-			if s.useFP16 {
-				var raw uint16
-				if _, err := s.queue.EnqueueReadBuffer(s.currBuf, true, offset, s.elementBytes, unsafe.Pointer(&raw), nil); err == nil {
-					v := float16BitsToFloat32(raw)
-					if v > 1 {
-						v = 1
-					} else if v < -1 {
-						v = -1
-					}
-					return v
-				}
-				return 0
-			}
-			var v float32
-			if _, err := s.queue.EnqueueReadBuffer(s.currBuf, true, offset, s.elementBytes, unsafe.Pointer(&v), nil); err == nil {
-				if v > 1 {
-					v = 1
-				} else if v < -1 {
-					v = -1
-				}
-				return v
-			}
-			return 0
-		}
-		s.earLeftSample = readOne(leftIndex)
-		s.earRightSample = readOne(rightIndex)
-		s.centerSample = 0.5 * (s.earLeftSample + s.earRightSample)
 	}
-	if err := s.setRenderSource(lastFrameOnly); err != nil {
-		return fmt.Errorf("configuring render source: %w", err)
+
+	// Update render kernel to use current buffer (always last frame only)
+	if err := s.renderKernel.SetArgBuffer(2, s.currBuf); err != nil {
+		return fmt.Errorf("setting render source: %w", err)
 	}
-	if err := s.setRenderFlags(showWalls, useVisibility); err != nil {
+	if err := s.setRenderFlags(showWalls); err != nil {
 		return fmt.Errorf("configuring render overlays: %w", err)
 	}
-	if _, err := s.queue.EnqueueNDRangeKernel(s.renderKernel, nil, accumGlobal, nil, nil); err != nil {
+	renderGlobal := []int{size}
+	if _, err := s.queue.EnqueueNDRangeKernel(s.renderKernel, nil, renderGlobal, nil, nil); err != nil {
 		return fmt.Errorf("enqueueing render kernel: %w", err)
 	}
 	if size > 0 && len(s.hostPixels) > 0 {
@@ -1263,15 +830,6 @@ func (s *openCLWaveSolver) Step(field *waveField, walls []bool, steps int, dtSec
 		s.pixelEvent = event
 		s.pixelMu.Unlock()
 	}
-	if s.debugVerify && size > 0 {
-		if _, err := s.queue.EnqueueReadBufferFloat32(s.currBuf, true, 0, field.curr, nil); err != nil {
-			return fmt.Errorf("reading current buffer for debug: %w", err)
-		}
-		if _, err := s.queue.EnqueueReadBufferFloat32(s.prevBuf, true, 0, field.prev, nil); err != nil {
-			return fmt.Errorf("reading previous buffer for debug: %w", err)
-		}
-	}
-	// No need to read back next buffer; it will be regenerated on subsequent steps.
 	s.coldStart = false
 	return nil
 }
@@ -1284,25 +842,9 @@ func (s *openCLWaveSolver) Close() {
 		s.pixelBuf.Release()
 		s.pixelBuf = nil
 	}
-	if s.accumBuf != nil {
-		s.accumBuf.Release()
-		s.accumBuf = nil
-	}
-	if s.visibilityBuf != nil {
-		s.visibilityBuf.Release()
-		s.visibilityBuf = nil
-	}
 	if s.wallMaskBuf != nil {
 		s.wallMaskBuf.Release()
 		s.wallMaskBuf = nil
-	}
-	if s.impulseValueBuf != nil {
-		s.impulseValueBuf.Release()
-		s.impulseValueBuf = nil
-	}
-	if s.impulseIndexBuf != nil {
-		s.impulseIndexBuf.Release()
-		s.impulseIndexBuf = nil
 	}
 	if s.earSampleBuf != nil {
 		s.earSampleBuf.Release()
@@ -1327,10 +869,6 @@ func (s *openCLWaveSolver) Close() {
 	if s.renderKernel != nil {
 		s.renderKernel.Release()
 		s.renderKernel = nil
-	}
-	if s.applyImpulsesKernel != nil {
-		s.applyImpulsesKernel.Release()
-		s.applyImpulsesKernel = nil
 	}
 	if s.program != nil {
 		s.program.Release()
@@ -1357,10 +895,6 @@ func (s *openCLWaveSolver) PixelBytes() []byte {
 	return s.hostPixels
 }
 
-func (s *openCLWaveSolver) CenterSample() float32 {
-	return s.centerSample
-}
-
 func (s *openCLWaveSolver) EarSample() (float32, float32) {
 	return s.earLeftSample, s.earRightSample
 }
@@ -1370,19 +904,6 @@ func (s *openCLWaveSolver) EarSamplesInterleaved() []float32 {
 		return nil
 	}
 	return s.hostEarSamples[:s.lastSampleCount*2]
-}
-
-func (s *openCLWaveSolver) CenterSamples() []float32 {
-	// Backward-compatible mono view of the ear samples (simple average).
-	if s.lastSampleCount <= 0 || s.lastSampleCount*2 > len(s.hostEarSamples) {
-		return nil
-	}
-	s.hostCenterMono = ensureFloat32Slice(s.hostCenterMono, s.lastSampleCount)
-	for i := 0; i < s.lastSampleCount; i++ {
-		base := i * 2
-		s.hostCenterMono[i] = 0.5 * (s.hostEarSamples[base] + s.hostEarSamples[base+1])
-	}
-	return s.hostCenterMono[:s.lastSampleCount]
 }
 
 func (s *openCLWaveSolver) waitForPixelEvent() error {

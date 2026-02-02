@@ -24,23 +24,11 @@ var (
 	// recordDefaultPGO triggers a scripted walk to produce default.pgo.
 	recordDefaultPGO = flag.Bool("record-default-pgo", false, "walk randomly for 15s while capturing default.pgo")
 
-	// occludeLineOfSightFlag hides regions outside of the listener's line of
-	// sight while rendering.
-	occludeLineOfSightFlag = flag.Bool("occlude-line-of-sight", false, "hide regions that are not in the listener's line of sight when rendering")
-
-	// fovDegreesFlag adjusts the field of view for visibility calculations.
-	fovDegreesFlag = flag.Float64("fov-deg", 90.0, "field of view angle for LOS (degrees)")
-
-	// lastFrameOnlyFlag forces the renderer to show only the most recent frame.
-	lastFrameOnlyFlag = flag.Bool("show-last-frame", true, "render only the latest simulation frame instead of the blended accumulation")
-
 	// tpsFlag controls Ebiten's tick/update rate (lower values reduce CPU/GPU overhead).
 	tpsFlag = flag.Int("tps", int(defaultTPS), "target ticks per second (frame/update rate), e.g. 15, 30, 60")
 
 	// debugFlag enables the FPS and simulation overlay.
 	debugFlag = flag.Bool("debug", true, "show FPS and simulation speed overlay")
-
-	verifyOpenCLSyncFlag = flag.Bool("verify-opencl-sync", false, "compare OpenCL buffers before/after simulation steps when skipping host uploads")
 
 	// enableAudioFlag toggles optional audio output driven by center samples.
 	enableAudioFlag = flag.Bool("enable-audio", true, "enable experimental audio output from center samples")
@@ -51,12 +39,6 @@ var (
 
 	// audioLoopFlag lets the user provide a WAV file that will loop instead of the impulse samples.
 	audioLoopFlag = flag.String("audio-loop", "test2.wav", "path to a WAV file to loop when audio output is enabled")
-
-	// disableWalkingPulsesFlag suppresses the walking-generated pressure pulses.
-	disableWalkingPulsesFlag = flag.Bool("disable-walking-pulses", true, "prevent movement from queuing impulses into the wave field")
-
-	// captureStepSamplesFlag enables per-step center sampling on the GPU.
-	captureStepSamplesFlag = flag.Bool("capture-step-samples", true, "capture per-step center samples on the GPU (higher GPU/CPU overhead)")
 
 	// emitterGainFlag scales the audio-loop-driven emitter samples before they are injected into the field.
 	emitterGainFlag = flag.Float64("emitter-gain", defaultEmitterGain, "gain applied to audio-loop emitter samples before injection")
@@ -91,8 +73,5 @@ var (
 	roomWallThicknessJitterMFlag = flag.Float64("room-wall-thickness-jitter-m", defaultWallThicknessJitM, "random room wall thickness variation in meters")
 	roomWallExclusionRadiusMFlag = flag.Float64("room-wall-exclusion-radius-m", defaultWallExclusionM, "minimum distance from listener to place room walls (meters)")
 	roomWallMaterialFlag         = flag.String("room-wall-material", defaultRoomWallMaterial, "room wall material preset: drywall, concrete, brick, glass, wood, curtain, acoustic")
-	roomWallReflectFlag          = flag.Float64("room-wall-reflect", defaultRoomWallReflect, "amplitude reflection coefficient at room wall surfaces (0-1)")
-
-	// wallClockAvgFramesFlag smooths wall clock dt sampling to avoid occasional jitter.
-	wallClockAvgFramesFlag = flag.Int("wall-clock-avg-frames", defaultWallClockAvgFrames, "moving average window (frames) for wall clock dt sampling; <=1 disables smoothing")
+	roomWallReflectFlag = flag.Float64("room-wall-reflect", defaultRoomWallReflect, "amplitude reflection coefficient at room wall surfaces (0-1)")
 )

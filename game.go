@@ -21,7 +21,6 @@ type Game struct {
 
 	controlEmitter bool
 
-	stepTimer         int
 	lastSimDuration   time.Duration
 	simStepMultiplier int
 
@@ -39,14 +38,8 @@ type Game struct {
 	autoWalkDirY       float64
 	autoWalkFrameCount int
 
-	visibleStamp []uint32
-	visibleGen   uint32
-	lastVisCX    int
-	lastVisCY    int
-
-	gpuSolver      *openCLWaveSolver
-	impulsesActive bool
-	wallsDirty     bool
+	gpuSolver  *openCLWaveSolver
+	wallsDirty bool
 
 	audioCtx      *audio.Context
 	audioStream   *centerAudioStream
@@ -79,12 +72,6 @@ func newGame() *Game {
 	if targetTPS > 0 {
 		// Keep steps/s approximately constant as TPS changes.
 		g.simStepMultiplier = int(math.Round(float64(audioSampleRate) / targetTPS))
-	}
-	if wallClockAvgFramesFlag != nil {
-		// kept for compatibility with existing defaults; no-op in fixed-timestep mode
-		_ = *wallClockAvgFramesFlag
-	} else {
-		_ = defaultWallClockAvgFrames
 	}
 	if solver, err := newOpenCLWaveSolver(w, h); err != nil {
 		log.Fatalf("OpenCL initialization failed: %v", err)
@@ -130,7 +117,6 @@ func newGame() *Game {
 
 	g.generateWalls()
 	g.randomizeEmitterStart(minEmitterStartDistancePixels)
-	g.lastVisCX, g.lastVisCY = -1, -1
 	return g
 }
 
@@ -216,42 +202,12 @@ func (g *Game) Update() error {
 	g.handleDebugControls()
 
 	movingListener := !g.controlEmitter && (dx != 0 || dy != 0)
-	impulsesFired := false
 	if movingListener {
 		length := math.Hypot(dx, dy)
 		if length > 0 {
 			g.listenerForwardX = dx / length
 			g.listenerForwardY = dy / length
 		}
-		g.stepTimer++
-		if g.stepTimer >= stepDelay {
-			g.stepTimer = 0
-			if !(*disableWalkingPulsesFlag) {
-				baseX := int(g.listenerX)
-				baseY := int(g.listenerY)
-				for _, offset := range emitterFootprint {
-					cx := baseX + offset.dx
-					cy := baseY + offset.dy
-					if cx <= 0 || cx >= w-1 || cy <= 0 || cy >= h-1 {
-						continue
-					}
-					if g.isWall(cx, cy) {
-						continue
-					}
-					if g.field.queueImpulse(cx, cy, stepImpulseStrength) {
-						impulsesFired = true
-					}
-				}
-			}
-		}
-	} else {
-		g.stepTimer = stepDelay
-	}
-
-	g.impulsesActive = impulsesFired
-
-	if *occludeLineOfSightFlag {
-		g.refreshVisibleMask()
 	}
 
 	steps := g.simStepMultiplier
@@ -261,12 +217,6 @@ func (g *Game) Update() error {
 		steps = maxSimMultiplier
 	}
 	simStart := time.Now()
-	var visibleStamp []uint32
-	var visibleGen uint32
-	if *occludeLineOfSightFlag {
-		visibleStamp = g.visibleStamp
-		visibleGen = g.visibleGen
-	}
 	var emitterData *audioEmitterData
 	if g.audioPressure != nil && steps > 0 {
 		if samples := g.fillAudioChunk(steps); len(samples) > 0 {
@@ -277,21 +227,16 @@ func (g *Game) Update() error {
 	}
 
 	leftIndex, rightIndex, _ := g.listenerEarIndices()
-	if err := g.gpuSolver.Step(g.field, g.walls, steps, g.lastUpdateDT, g.wallsDirty, *showWallsFlag, *lastFrameOnlyFlag, *occludeLineOfSightFlag, visibleStamp, visibleGen, leftIndex, rightIndex, emitterData); err != nil {
+	if err := g.gpuSolver.Step(g.field, g.walls, steps, g.lastUpdateDT, g.wallsDirty, *showWallsFlag, leftIndex, rightIndex, emitterData); err != nil {
 		return err
 	}
 	earGainL, earGainR := g.earDirectivityGains()
-	if captureStepSamplesFlag != nil && *captureStepSamplesFlag && g.gpuSolver != nil {
-		if samples := g.gpuSolver.EarSamplesInterleaved(); len(samples) > 0 {
-			if g.audioStream != nil {
-				scaled := g.scaleEarSamples(samples, earGainL, earGainR)
-				g.audioStream.EnqueueInterleaved(scaled)
-			}
-			g.logCapturedEarSamples(samples)
+	if samples := g.gpuSolver.EarSamplesInterleaved(); len(samples) > 0 {
+		if g.audioStream != nil {
+			scaled := g.scaleEarSamples(samples, earGainL, earGainR)
+			g.audioStream.EnqueueInterleaved(scaled)
 		}
-	} else if g.audioStream != nil && g.gpuSolver != nil {
-		left, right := g.gpuSolver.EarSample()
-		g.audioStream.SetStereo(left*earGainL, right*earGainR)
+		g.logCapturedEarSamples(samples)
 	}
 	g.wallsDirty = false
 	g.lastSimDuration = time.Since(simStart)

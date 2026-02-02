@@ -12,12 +12,11 @@ const (
 	defaultCellSizeM          = defaultWorldWidthFeet * 0.3048 / float64(w)
 	defaultAirTempC           = 20.0
 	defaultRT60Seconds        = 0.5
-	emitterRad                = 1
-	defaultWalkSpeedMPS       = 1.4
-	defaultRunSpeedMPS        = 3.0
-	defaultEmitterGain        = 1
-	stepDelay                 = 60 / 4
-	defaultTPS                = 60.0
+	emitterRad           = 1
+	defaultWalkSpeedMPS  = 1.4
+	defaultRunSpeedMPS   = 3.0
+	defaultEmitterGain   = 1
+	defaultTPS           = 60.0
 	defaultSimMultiplier      = 735
 	simMultiplierStep         = 10
 	minSimMultiplier          = 1
@@ -26,9 +25,8 @@ const (
 	defaultEarDirectivity     = 0.8
 	defaultBoundaryReflect    = 0.98
 	defaultAirAbsDbPerM       = 0.01
-	visualGamma               = 1.0
-	stepImpulseStrength       = 20.0
-	defaultWallSegments       = 5
+	visualGamma         = 1.0
+	defaultWallSegments = 5
 	defaultWallMinLenM        = 1.0
 	defaultWallMaxLenM        = 12.0
 	defaultWallThicknessM     = 0.15
@@ -38,8 +36,7 @@ const (
 	defaultRoomWallReflect    = 0.90
 	pgoRecordDuration         = 15 * time.Second
 	sampleCaptureLogInterval  = 500 * time.Millisecond
-	defaultAudioBufferMS      = 40
-	defaultWallClockAvgFrames = 8
+	defaultAudioBufferMS = 40
 )
 
 var worldBoundaryReflect = defaultBoundaryReflect
