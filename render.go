@@ -29,6 +29,7 @@ func (g *Game) Draw(screen *ebiten.Image) {
 	}
 	g.drawEarIndicators(screen, int(g.listenerX), int(g.listenerY))
 	g.drawAudioSampleMarker(screen)
+	g.drawScaleBar(screen)
 
 	if *debugFlag {
 		fps := ebiten.ActualFPS()
@@ -86,6 +87,69 @@ func (g *Game) drawAudioSampleMarker(screen *ebiten.Image) {
 			screen.Set(x, y, dotColor)
 		}
 	}
+}
+
+func (g *Game) drawScaleBar(screen *ebiten.Image) {
+	dxM := cellSizeMeters()
+	if dxM <= 0 {
+		return
+	}
+	const metersPerFoot = 0.3048
+	feetPerCell := dxM / metersPerFoot
+	if feetPerCell <= 0 {
+		return
+	}
+
+	// Choose a "nice" bar length that fits comfortably on screen.
+	maxBarPixels := float64(w) * 0.18
+	if maxBarPixels > 140 {
+		maxBarPixels = 140
+	}
+	if maxBarPixels < 60 {
+		maxBarPixels = 60
+	}
+	candidatesFeet := []float64{1, 2, 5, 10, 20, 50}
+	chosenFeet := candidatesFeet[0]
+	chosenPixels := chosenFeet / feetPerCell
+	for _, ft := range candidatesFeet {
+		pixels := ft / feetPerCell
+		if pixels <= maxBarPixels && pixels >= 35 {
+			chosenFeet = ft
+			chosenPixels = pixels
+		}
+	}
+	barLen := int(math.Round(chosenPixels))
+	if barLen < 10 {
+		return
+	}
+
+	label := fmt.Sprintf("%.0f ft", chosenFeet)
+	labelWidth := 7 * len(label)
+
+	margin := 6
+	x1 := w - margin
+	x0 := x1 - barLen
+	y := h - margin - 2
+	labelX := x1 - labelWidth
+	labelY := y - 14
+
+	if x0 < margin {
+		x0 = margin
+	}
+	if labelX < margin {
+		labelX = margin
+	}
+	if labelY < margin {
+		labelY = margin
+	}
+
+	lineColor := color.RGBA{240, 240, 240, 255}
+	shadowColor := color.RGBA{0, 0, 0, 180}
+	drawLine(screen, x0+1, y+1, x1+1, y+1, shadowColor)
+	drawLine(screen, x0, y, x1, y, lineColor)
+	drawLine(screen, x0, y-3, x0, y+3, lineColor)
+	drawLine(screen, x1, y-3, x1, y+3, lineColor)
+	ebitenutil.DebugPrintAt(screen, label, labelX, labelY)
 }
 
 // drawLine plots a line segment using Bresenham's integer algorithm.

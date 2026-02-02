@@ -91,6 +91,7 @@ Customize simulation behavior with additional flags:
 - `-rt60-s=<value>` — sets an approximate RT60 decay time in seconds; used to compute per-step damping (`<=0` disables damping; default `1.2`).
 - `-run-speed-mps=<value>` — sets listener running speed in meters/second; used for WASD/autowalk movement (default `3.0`).
 - `-walk-speed-mps=<value>` — sets listener walking speed in meters/second while holding Shift (default `1.4`).
+- `-ear-directivity=<value>` — ear directionality strength (0–1) applied vs the emitter direction; `0` disables (default `0.8`).
 - `-room-wall-segments=<value>` — number of random interior “room wall” segments to generate (default `20`).
 - `-room-wall-min-len-m=<value>` — minimum room wall segment length in meters (default `1.0`).
 - `-room-wall-max-len-m=<value>` — maximum room wall segment length in meters (default `12.0`).

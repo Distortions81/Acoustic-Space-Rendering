@@ -79,6 +79,10 @@ var (
 	// walkSpeedMPSFlag sets the listener walking speed used when converting movement to grid cells.
 	walkSpeedMPSFlag = flag.Float64("walk-speed-mps", defaultWalkSpeedMPS, "listener walking speed in meters/second used when holding Shift")
 
+	// earDirectivityFlag applies a simple directionality pattern to each ear based on the emitter direction.
+	// 0 disables directionality, 1 uses a full cardioid response.
+	earDirectivityFlag = flag.Float64("ear-directivity", defaultEarDirectivity, "ear directionality strength (0-1); 0 disables, 1 is full cardioid vs emitter direction")
+
 	// Room wall generation parameters (converted from meters to cells using -cell-size-m).
 	roomWallSegmentsFlag         = flag.Int("room-wall-segments", defaultWallSegments, "number of random room wall segments to generate")
 	roomWallMinLenMFlag          = flag.Float64("room-wall-min-len-m", defaultWallMinLenM, "minimum room wall segment length in meters")

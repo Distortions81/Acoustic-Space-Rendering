@@ -54,6 +54,7 @@ type Game struct {
 	audioPlayer   *audio.Player
 	audioPressure *audioPressureSource
 	audioChunk    []float32
+	earChunk      []float32
 }
 
 const minEmitterStartDistancePixels = 128
@@ -247,16 +248,18 @@ func (g *Game) Update() error {
 	if err := g.gpuSolver.Step(g.field, g.walls, steps, updateTPS, g.wallsDirty, *showWallsFlag, *lastFrameOnlyFlag, *occludeLineOfSightFlag, visibleStamp, visibleGen, leftIndex, rightIndex, emitterData); err != nil {
 		return err
 	}
+	earGainL, earGainR := g.earDirectivityGains()
 	if captureStepSamplesFlag != nil && *captureStepSamplesFlag && g.gpuSolver != nil {
 		if samples := g.gpuSolver.EarSamplesInterleaved(); len(samples) > 0 {
 			if g.audioStream != nil {
-				g.audioStream.EnqueueInterleaved(samples)
+				scaled := g.scaleEarSamples(samples, earGainL, earGainR)
+				g.audioStream.EnqueueInterleaved(scaled)
 			}
 			g.logCapturedEarSamples(samples)
 		}
 	} else if g.audioStream != nil && g.gpuSolver != nil {
 		left, right := g.gpuSolver.EarSample()
-		g.audioStream.SetStereo(left, right)
+		g.audioStream.SetStereo(left*earGainL, right*earGainR)
 	}
 	g.wallsDirty = false
 	g.lastSimDuration = time.Since(simStart)
@@ -356,6 +359,73 @@ func (g *Game) listenerEarIndices() (int32, int32, bool) {
 	rightX := clampCoord(cx+ox, 0, w-1)
 	rightY := clampCoord(cy+oy, 0, h-1)
 	return int32(leftY*w + leftX), int32(rightY*w + rightX), true
+}
+
+func (g *Game) earDirectivityGains() (float32, float32) {
+	strength := defaultEarDirectivity
+	if earDirectivityFlag != nil {
+		strength = *earDirectivityFlag
+	}
+	if strength <= 0 {
+		return 1, 1
+	}
+	if strength > 1 {
+		strength = 1
+	}
+	ox, oy := g.earOffsets()
+	headX, headY := g.listenerX, g.listenerY
+	leftX := headX - float64(ox)
+	leftY := headY - float64(oy)
+	rightX := headX + float64(ox)
+	rightY := headY + float64(oy)
+
+	// Outward normals from the head center to each ear.
+	nLX, nLY, okL := normalize2(leftX-headX, leftY-headY)
+	nRX, nRY, okR := normalize2(rightX-headX, rightY-headY)
+	if !okL || !okR {
+		return 1, 1
+	}
+
+	// Direction from each ear to the emitter (proxy for dominant incident direction).
+	toLX, toLY, okTL := normalize2(g.emitterX-leftX, g.emitterY-leftY)
+	toRX, toRY, okTR := normalize2(g.emitterX-rightX, g.emitterY-rightY)
+	if !okTL || !okTR {
+		return 1, 1
+	}
+
+	dotL := nLX*toLX + nLY*toLY
+	dotR := nRX*toRX + nRY*toRY
+	patternL := 0.5 * (1.0 + dotL)
+	patternR := 0.5 * (1.0 + dotR)
+	gainL := (1.0 - strength) + strength*patternL
+	gainR := (1.0 - strength) + strength*patternR
+	return float32(gainL), float32(gainR)
+}
+
+func (g *Game) scaleEarSamples(samples []float32, gainL, gainR float32) []float32 {
+	if len(samples) == 0 {
+		return nil
+	}
+	if gainL == 1 && gainR == 1 {
+		return samples
+	}
+	if cap(g.earChunk) < len(samples) {
+		g.earChunk = make([]float32, len(samples))
+	}
+	g.earChunk = g.earChunk[:len(samples)]
+	for i := 0; i+1 < len(samples); i += 2 {
+		g.earChunk[i] = samples[i] * gainL
+		g.earChunk[i+1] = samples[i+1] * gainR
+	}
+	return g.earChunk
+}
+
+func normalize2(x, y float64) (float64, float64, bool) {
+	mag := math.Hypot(x, y)
+	if mag == 0 {
+		return 0, 0, false
+	}
+	return x / mag, y / mag, true
 }
 
 func (g *Game) controlModeLabel() string {

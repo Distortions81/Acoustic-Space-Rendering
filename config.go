@@ -15,7 +15,7 @@ const (
 	emitterRad               = 1
 	defaultWalkSpeedMPS      = 1.4
 	defaultRunSpeedMPS       = 3.0
-	defaultEmitterGain       = 0.1
+	defaultEmitterGain       = 0.25
 	stepDelay                = 60 / 4
 	defaultTPS               = 60.0
 	defaultSimMultiplier     = 735
@@ -23,6 +23,7 @@ const (
 	minSimMultiplier         = 1
 	maxSimMultiplier         = 1000
 	defaultEarSpacingM       = 0.18
+	defaultEarDirectivity    = 0.8
 	defaultBoundaryReflect   = 0.98
 	defaultAirAbsDbPerM      = 0.01
 	visualGamma              = 1.0
