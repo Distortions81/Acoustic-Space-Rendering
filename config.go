@@ -25,14 +25,14 @@ const (
 	defaultEarDirectivity    = 0.8
 	defaultBoundaryReflect   = 0.98
 	defaultAirAbsDbPerM      = 0.01
-	visualGamma              = 1.0
+	visualGamma              = 1.8
 	defaultWallSegments      = 4
 	defaultWallMinLenM       = 1.0
 	defaultWallMaxLenM       = 12.0
 	defaultWallThicknessM    = 0.15
 	defaultWallThicknessJitM = 0.10
 	defaultWallExclusionM    = 0.5
-	defaultRoomWallMaterial  = "drywall"
+	defaultRoomWallMaterial  = "concrete"
 	defaultRoomWallReflect   = 0.90
 	pgoRecordDuration        = 15 * time.Second
 	sampleCaptureLogInterval = 500 * time.Millisecond
