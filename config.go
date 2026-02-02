@@ -8,7 +8,7 @@ import "time"
 const (
 	w, h                      = 512, 512
 	windowScale               = 2
-	defaultWorldWidthFeet     = 50
+	defaultWorldWidthFeet     = 100
 	defaultCellSizeM          = defaultWorldWidthFeet * 0.3048 / float64(w)
 	defaultAirTempC           = 20.0
 	defaultRT60Seconds        = 0.5

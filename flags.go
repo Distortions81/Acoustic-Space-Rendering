@@ -16,7 +16,7 @@ var (
 	worldBoundaryAbsorbFlag = flag.Bool("world-boundary-absorb", true, "treat the world boundary as absorbing (overrides world boundary reflection when true)")
 
 	// wallReflectMultFlag scales all wall reflection coefficients (room walls + world boundary).
-	wallReflectMultFlag = flag.Float64("wall-reflect-mult", 1.0, "multiplier applied to wall reflection coefficients (scales -room-wall-reflect and -world-boundary-reflect); 0 disables reflections")
+	wallReflectMultFlag = flag.Float64("wall-reflect-mult", 0.75, "multiplier applied to wall reflection coefficients (scales -room-wall-reflect and -world-boundary-reflect); 0 disables reflections")
 
 	// preferFP16Flag enables 16-bit wave buffers on devices that support half precision.
 	preferFP16Flag = flag.Bool("prefer-fp16", false, "use 16-bit floats for the OpenCL solver when supported")
