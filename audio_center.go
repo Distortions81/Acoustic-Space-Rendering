@@ -1,11 +1,19 @@
 package main
 
-import "sync"
+import (
+	"math"
+	"sync"
+)
 
 const (
 	audioSampleRate      = 44100
 	audioDCCouplingAlpha = 0.001
 	stereoFrameByteWidth = 4 // two int16 samples per frame (stereo)
+)
+
+var (
+	softClipDrive = float32(2.5)
+	softClipNorm  = float32(1.0 / math.Tanh(float64(softClipDrive)))
 )
 
 type centerAudioStream struct {
@@ -30,12 +38,7 @@ func (s *centerAudioStream) Enqueue(samples []float32) {
 	s.mu.Lock()
 	s.compactPendingLocked()
 	for _, v := range samples {
-		switch {
-		case v > 1:
-			v = 1
-		case v < -1:
-			v = -1
-		}
+		v = softClip(v)
 		s.pending = append(s.pending, v)
 	}
 	s.mu.Unlock()
@@ -91,4 +94,18 @@ func (s *centerAudioStream) compactPendingLocked() {
 		s.pending = s.pending[:remaining]
 	}
 	s.pos = 0
+}
+
+func softClip(x float32) float32 {
+	if x == 0 {
+		return 0
+	}
+	y := float32(math.Tanh(float64(x*softClipDrive))) * softClipNorm
+	if y > 1 {
+		return 1
+	}
+	if y < -1 {
+		return -1
+	}
+	return y
 }

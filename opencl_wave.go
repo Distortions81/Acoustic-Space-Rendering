@@ -3,6 +3,7 @@ package main
 import (
 	"errors"
 	"fmt"
+	"log"
 	"math"
 	"strings"
 	"sync"
@@ -69,6 +70,10 @@ type openCLWaveSolver struct {
 	impulsePrevHalf         []uint16
 	centerSample            float32
 	lastSampleCount         int
+	lastDamp                float32
+	lastSpeed               float32
+	warnedCoeffClamp        bool
+	sampleIndex             int32
 }
 
 type audioEmitterData struct {
@@ -125,11 +130,24 @@ __kernel void wave_step(
     real_t center = curr[idx];
     real_t laplacian = curr[left] + curr[right] + curr[top] + curr[bottom] - four * center;
     real_t next_val = ((two * center - prev[idx]) + speed_r * laplacian) * damp_r;
-    if (idx == emitter_index && emitter_index >= 0) {
-        next_buffer[idx] = emitter_value;
-    } else {
-        next_buffer[idx] = next_val;
+    if (emitter_index >= 0) {
+        int ex = emitter_index % width;
+        int ey = emitter_index / width;
+        int dx = x - ex;
+        int dy = y - ey;
+        int adx = abs(dx);
+        int ady = abs(dy);
+        if (adx <= 1 && ady <= 1) {
+            // Distribute the source across a 3x3 neighborhood to reduce wideband
+            // injection artifacts. Binomial weights sum to 1:
+            // [1 2 1] ⊗ [1 2 1] / 16.
+            int wx = (adx == 0) ? 2 : 1;
+            int wy = (ady == 0) ? 2 : 1;
+            real_t weight = to_real((float)(wx * wy) * 0.0625f);
+            next_val += emitter_value * weight;
+        }
     }
+    next_buffer[idx] = next_val;
 }
 
 __kernel void apply_impulses(
@@ -240,18 +258,18 @@ __kernel void boundary_accumulate(
 
 __kernel void sample_center(
     const int step_index,
-    const int width,
-    const int height,
+    const int sample_index,
+    const int size,
     __global const real_t* curr,
     __global real_t* samples)
 {
-    int cx = width / 2;
-    int cy = height / 2;
-    if (cx < 0 || cy < 0 || cx >= width || cy >= height) {
+    if (step_index < 0) {
         return;
     }
-    int idx = cy * width + cx;
-    samples[step_index] = curr[idx];
+    if (sample_index < 0 || sample_index >= size) {
+        return;
+    }
+    samples[step_index] = curr[sample_index];
 }
 `
 
@@ -596,11 +614,16 @@ func newOpenCLWaveSolver(width, height int) (*openCLWaveSolver, error) {
 	}
 	fmt.Printf("OpenCL device: %s (precision %s)\n", solver.deviceName, precision)
 
+	coeffs, err := computeWaveCoefficients(defaultTPS * float64(defaultSimMultiplier))
+	if err != nil {
+		solver.Close()
+		return nil, fmt.Errorf("computing wave coefficients: %w", err)
+	}
 	if err := solver.kernel.SetArgs(
 		int32(width),
 		int32(height),
-		waveDamp32,
-		waveSpeed32,
+		coeffs.DampPerStep,
+		coeffs.SpeedCoeff,
 		solver.currBuf,
 		solver.prevBuf,
 		solver.nextBuf,
@@ -613,6 +636,8 @@ func newOpenCLWaveSolver(width, height int) (*openCLWaveSolver, error) {
 		solver.Close()
 		return nil, fmt.Errorf("setting kernel emitter defaults: %w", err)
 	}
+	solver.lastDamp = coeffs.DampPerStep
+	solver.lastSpeed = coeffs.SpeedCoeff
 	if err := solver.renderKernel.SetArgs(
 		int32(width),
 		int32(height),
@@ -845,11 +870,11 @@ func (s *openCLWaveSolver) sampleCenter(step int) error {
 	if err := s.sampleKernel.SetArgInt32(0, int32(step)); err != nil {
 		return fmt.Errorf("setting sample step index: %w", err)
 	}
-	if err := s.sampleKernel.SetArgInt32(1, int32(s.width)); err != nil {
-		return fmt.Errorf("setting sample width: %w", err)
+	if err := s.sampleKernel.SetArgInt32(1, int32(s.sampleIndex)); err != nil {
+		return fmt.Errorf("setting sample index: %w", err)
 	}
-	if err := s.sampleKernel.SetArgInt32(2, int32(s.height)); err != nil {
-		return fmt.Errorf("setting sample height: %w", err)
+	if err := s.sampleKernel.SetArgInt32(2, int32(s.width*s.height)); err != nil {
+		return fmt.Errorf("setting sample size: %w", err)
 	}
 	if err := s.sampleKernel.SetArgBuffer(3, s.currBuf); err != nil {
 		return fmt.Errorf("binding sample source buffer: %w", err)
@@ -896,6 +921,25 @@ func (s *openCLWaveSolver) bindDynamicBuffers() error {
 			return err
 		}
 		s.boundNext = s.nextBuf
+	}
+	return nil
+}
+
+func (s *openCLWaveSolver) setWaveCoefficients(damp, speed float32) error {
+	if s.kernel == nil {
+		return nil
+	}
+	if damp != s.lastDamp {
+		if err := s.kernel.SetArgFloat32(2, damp); err != nil {
+			return err
+		}
+		s.lastDamp = damp
+	}
+	if speed != s.lastSpeed {
+		if err := s.kernel.SetArgFloat32(3, speed); err != nil {
+			return err
+		}
+		s.lastSpeed = speed
 	}
 	return nil
 }
@@ -1026,14 +1070,30 @@ func (s *openCLWaveSolver) setRenderSource(lastFrameOnly bool) error {
 	return nil
 }
 
-func (s *openCLWaveSolver) Step(field *waveField, walls []bool, steps int, wallsDirty bool, showWalls bool, lastFrameOnly bool, occludeLOS bool, visibleStamp []uint32, visibleGen uint32, emitter *audioEmitterData) error {
+func (s *openCLWaveSolver) Step(field *waveField, walls []bool, steps int, wallsDirty bool, showWalls bool, lastFrameOnly bool, occludeLOS bool, visibleStamp []uint32, visibleGen uint32, listenerIndex int32, emitter *audioEmitterData) error {
 	if steps <= 0 {
 		return nil
+	}
+	coeffs, err := computeWaveCoefficients(defaultTPS * float64(steps))
+	if err != nil {
+		return err
+	}
+	if coeffs.Clamped && !s.warnedCoeffClamp {
+		log.Printf("Wave coefficient clamped for stability: (c*dt/dx)^2=%.4f -> %.4f (c=%.1fm/s dx=%.4fm dt=%.6fs steps/s=%.1f). Increase sim steps or increase cell size.",
+			float64(coeffs.Courant*coeffs.Courant), float64(coeffs.SpeedCoeff), coeffs.SpeedSoundMS, coeffs.DxMeters, coeffs.DtSeconds, coeffs.StepsPerSec)
+		s.warnedCoeffClamp = true
+	}
+	if err := s.setWaveCoefficients(coeffs.DampPerStep, coeffs.SpeedCoeff); err != nil {
+		return fmt.Errorf("setting wave coefficients: %w", err)
 	}
 	size := s.width * s.height
 	if len(field.curr) != size || len(field.prev) != size || len(field.next) != size {
 		return fmt.Errorf("unexpected field buffer size")
 	}
+	if listenerIndex < 0 || int(listenerIndex) >= size {
+		listenerIndex = int32((s.height/2)*s.width + (s.width / 2))
+	}
+	s.sampleIndex = listenerIndex
 	var emitterIndex int32 = -1
 	var emitterSamples []float32
 	if emitter != nil && emitter.index >= 0 && len(emitter.samples) > 0 {
@@ -1160,32 +1220,27 @@ func (s *openCLWaveSolver) Step(field *waveField, walls []bool, steps int, walls
 	} else if steps > 0 && size > 0 && s.width > 0 && s.height > 0 {
 		// Fallback: sample a single center value from the current buffer when
 		// per-step sampling is disabled.
-		cx := s.width / 2
-		cy := s.height / 2
-		if cx >= 0 && cx < s.width && cy >= 0 && cy < s.height {
-			idx := cy*s.width + cx
-			offset := idx * s.elementBytes
-			if s.useFP16 {
-				var raw uint16
-				if _, err := s.queue.EnqueueReadBuffer(s.currBuf, true, offset, s.elementBytes, unsafe.Pointer(&raw), nil); err == nil {
-					v := float16BitsToFloat32(raw)
-					if v > 1 {
-						v = 1
-					} else if v < -1 {
-						v = -1
-					}
-					s.centerSample = v
+		offset := int(listenerIndex) * s.elementBytes
+		if s.useFP16 {
+			var raw uint16
+			if _, err := s.queue.EnqueueReadBuffer(s.currBuf, true, offset, s.elementBytes, unsafe.Pointer(&raw), nil); err == nil {
+				v := float16BitsToFloat32(raw)
+				if v > 1 {
+					v = 1
+				} else if v < -1 {
+					v = -1
 				}
-			} else {
-				var v float32
-				if _, err := s.queue.EnqueueReadBuffer(s.currBuf, true, offset, s.elementBytes, unsafe.Pointer(&v), nil); err == nil {
-					if v > 1 {
-						v = 1
-					} else if v < -1 {
-						v = -1
-					}
-					s.centerSample = v
+				s.centerSample = v
+			}
+		} else {
+			var v float32
+			if _, err := s.queue.EnqueueReadBuffer(s.currBuf, true, offset, s.elementBytes, unsafe.Pointer(&v), nil); err == nil {
+				if v > 1 {
+					v = 1
+				} else if v < -1 {
+					v = -1
 				}
+				s.centerSample = v
 			}
 		}
 	}

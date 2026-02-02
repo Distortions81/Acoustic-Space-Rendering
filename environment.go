@@ -6,6 +6,58 @@ import (
 	"time"
 )
 
+func cellSizeMeters() float64 {
+	if cellSizeMFlag != nil && *cellSizeMFlag > 0 {
+		return *cellSizeMFlag
+	}
+	return defaultCellSizeM
+}
+
+func metersToCells(distanceM float64) int {
+	dx := cellSizeMeters()
+	if dx <= 0 {
+		return 0
+	}
+	return int(math.Round(distanceM / dx))
+}
+
+func wallHalfThicknessCells() int {
+	thicknessM := defaultWallThicknessM
+	if wallThicknessMFlag != nil {
+		thicknessM = *wallThicknessMFlag
+	}
+	if thicknessM < 0 {
+		thicknessM = 0
+	}
+	widthCells := metersToCells(thicknessM)
+	if widthCells < 1 {
+		widthCells = 1
+	}
+	if widthCells%2 == 0 {
+		widthCells++
+	}
+	return (widthCells - 1) / 2
+}
+
+func wallHalfThicknessJitterCells() int {
+	jitterM := defaultWallThicknessJitM
+	if wallThicknessJitterMFlag != nil {
+		jitterM = *wallThicknessJitterMFlag
+	}
+	if jitterM <= 0 {
+		return 0
+	}
+	jitterCells := metersToCells(jitterM)
+	if jitterCells < 0 {
+		jitterCells = 0
+	}
+	// Jitter is applied to the half-thickness to keep the wall centered.
+	if jitterCells%2 != 0 {
+		jitterCells++
+	}
+	return jitterCells / 2
+}
+
 // generateWalls procedurally creates wall segments within the grid.
 func (g *Game) generateWalls() {
 	if len(g.walls) != w*h {
@@ -18,15 +70,42 @@ func (g *Game) generateWalls() {
 	if g.levelRand == nil {
 		g.levelRand = rand.New(rand.NewSource(time.Now().UnixNano() + 1))
 	}
-	for s := 0; s < wallSegments; s++ {
-		lengthRange := wallMaxLen - wallMinLen + 1
+
+	segments := defaultWallSegments
+	if wallSegmentsFlag != nil && *wallSegmentsFlag > 0 {
+		segments = *wallSegmentsFlag
+	}
+	minLenM := defaultWallMinLenM
+	if wallMinLenMFlag != nil {
+		minLenM = *wallMinLenMFlag
+	}
+	maxLenM := defaultWallMaxLenM
+	if wallMaxLenMFlag != nil {
+		maxLenM = *wallMaxLenMFlag
+	}
+	minLenCells := metersToCells(minLenM)
+	maxLenCells := metersToCells(maxLenM)
+	if minLenCells < 1 {
+		minLenCells = 1
+	}
+	if maxLenCells < 1 {
+		maxLenCells = 1
+	}
+	if minLenCells > maxLenCells {
+		minLenCells, maxLenCells = maxLenCells, minLenCells
+	}
+	baseHalfThickness := wallHalfThicknessCells()
+	jitterHalfThickness := wallHalfThicknessJitterCells()
+
+	for s := 0; s < segments; s++ {
+		lengthRange := maxLenCells - minLenCells + 1
 		if lengthRange <= 0 {
 			lengthRange = 1
 		}
-		length := wallMinLen + g.levelRand.Intn(lengthRange)
-		thickness := 1
-		if wallThicknessVariance > 0 {
-			thickness += g.levelRand.Intn(wallThicknessVariance + 1)
+		length := minLenCells + g.levelRand.Intn(lengthRange)
+		thickness := baseHalfThickness
+		if jitterHalfThickness > 0 {
+			thickness += g.levelRand.Intn(jitterHalfThickness + 1)
 		}
 		horizontal := g.levelRand.Intn(2) == 0
 		x := g.levelRand.Intn(w-4) + 2
@@ -59,9 +138,20 @@ func (g *Game) trySetWall(x, y int) {
 	if x <= 1 || x >= w-1 || y <= 1 || y >= h-1 {
 		return
 	}
-	dx := float64(x) - g.ex
-	dy := float64(y) - g.ey
-	if dx*dx+dy*dy < float64(wallExclusionRadius*wallExclusionRadius) {
+	exclusionM := defaultWallExclusionM
+	if wallExclusionRadiusMFlag != nil {
+		exclusionM = *wallExclusionRadiusMFlag
+	}
+	if exclusionM < 0 {
+		exclusionM = 0
+	}
+	exclusionCells := metersToCells(exclusionM)
+	if exclusionCells < 0 {
+		exclusionCells = 0
+	}
+	dx := float64(x) - g.listenerX
+	dy := float64(y) - g.listenerY
+	if dx*dx+dy*dy < float64(exclusionCells*exclusionCells) {
 		return
 	}
 	idx := y*w + x

@@ -54,8 +54,12 @@ main files and functions in the repository.
     values plus the Laplacian term.
   - Multiplies by a damping factor so energy decays over time.
 - The constants that control this behavior are defined in `config.go`:
-  - `damp` / `waveDamp32` control how quickly waves decay.
-  - `speed` / `waveSpeed32` control how quickly waves propagate.
+  - The solver now derives `damp` and `speed` coefficients from real-world units:
+    - `speed` is computed as `(c·dt/dx)^2`, where `c` is the speed of sound,
+      `dt` is the simulation time step, and `dx` is meters per grid cell.
+    - `damp` is computed from a target RT60 (seconds) as `exp(-ln(1000)·dt/RT60)`.
+  - These inputs come from runtime flags (`-cell-size-m`, `-air-temp-c`, `-rt60-s`)
+    and the current simulation step rate.
 - When an emitter is active (see “Continuous audio‑driven emitter” below),
   `wave_step` overwrites the computed value at the emitter’s cell with a
   supplied source value instead of the normal update.
@@ -104,8 +108,10 @@ main files and functions in the repository.
   - The solver records `emitterIndex` and the slice of `emitterSamples`.
   - For each simulation substep, it calls `setEmitterValue` with the
     appropriate sample for that substep.
-  - In `wave_step`, whenever the current cell index equals `emitter_index`,
-    the kernel writes `emitter_value` instead of the normal wave update.
+  - In `wave_step`, the kernel adds a source term derived from `emitter_value`
+    onto the computed next value, distributing it across a 3×3 neighborhood
+    around `emitter_index` using binomial weights. This reduces wideband
+    artifacts compared to hard overwriting a single cell each step.
 
 ## Walls and Boundaries
 
@@ -115,13 +121,17 @@ main files and functions in the repository.
   `environment.go`:
   - It clears any previous wall state.
   - It randomly chooses segment positions, orientations, lengths, and
-    thicknesses based on constants in `config.go` (such as `wallSegments`,
-    `wallMinLen`, `wallMaxLen`, and `wallThicknessVariance`).
+    thicknesses based on runtime flags:
+    - `-wall-segments` controls how many segments are generated.
+    - `-wall-min-len-m` / `-wall-max-len-m` define segment lengths in meters.
+    - `-wall-thickness-m` / `-wall-thickness-jitter-m` define thickness in meters.
+    - These meter values are converted to cell units using `-cell-size-m`.
   - For each segment, it calls `trySetWall` to mark grid cells as walls.
 - `trySetWall` enforces:
   - Walls stay away from the window border.
-  - Walls stay outside a small exclusion radius around the listener so the
-    player does not start inside solid geometry.
+  - Walls stay outside an exclusion radius around the listener
+    (`-wall-exclusion-radius-m`) so the player does not start inside solid
+    geometry.
   - When a cell becomes a wall, `waveField.zeroCell` clears its wave values
     to zero.
 - At simulation time, walls are represented by a Boolean slice `walls` on the
@@ -143,6 +153,8 @@ main files and functions in the repository.
 - `boundaryReflect` in `config.go` holds the default reflection coefficient.
   - In `main.go`, the `-wall-reflect` flag is parsed and clamped to the
     `[0, 1]` range before being stored back into `boundaryReflect`.
+  - When `-absorb-edges=true` (the default), `main.go` overrides
+    `boundaryReflect` to `0`, making the outer boundary absorbing.
 - After each call to `wave_step`, `openCLWaveSolver.runBoundaryAccumulate`
   runs `boundary_accumulate`:
   - This enforces the boundary conditions.
@@ -279,4 +291,3 @@ Together, these pieces form a GPU‑accelerated visualization of acoustic wave
 propagation in a simple, procedurally generated environment, with optional
 line‑of‑sight masking and an audio output derived from the simulated pressure
 field.
-

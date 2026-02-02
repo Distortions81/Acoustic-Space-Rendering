@@ -7,8 +7,8 @@ func (g *Game) refreshVisibleMask() {
 	if len(g.visibleStamp) != w*h {
 		g.visibleStamp = make([]uint32, w*h)
 	}
-	cx := clampCoord(int(math.Round(g.ex)), 0, w-1)
-	cy := clampCoord(int(math.Round(g.ey)), 0, h-1)
+	cx := clampCoord(int(math.Round(g.listenerX)), 0, w-1)
+	cy := clampCoord(int(math.Round(g.listenerY)), 0, h-1)
 	if g.lastVisCX == cx && g.lastVisCY == cy {
 		return
 	}

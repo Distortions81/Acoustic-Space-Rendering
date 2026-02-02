@@ -1,24 +1,28 @@
 package main
 
 import (
-    "flag"
-    "log"
-    "os"
-    "time"
+	"flag"
+	"log"
+	"os"
+	"time"
 
-    "github.com/hajimehoshi/ebiten/v2"
+	"github.com/hajimehoshi/ebiten/v2"
 )
 
 // main configures the runtime, optionally records a profile, and launches Ebiten.
 func main() {
 	flag.Parse()
-	boundaryReflect = *wallReflectFlag
+	if absorbEdgesFlag != nil && *absorbEdgesFlag {
+		boundaryReflect = 0
+	} else {
+		boundaryReflect = *wallReflectFlag
+	}
 	if boundaryReflect < 0 {
 		boundaryReflect = 0
 	} else if boundaryReflect > 1 {
 		boundaryReflect = 1
 	}
-    var stopProfile func()
+	var stopProfile func()
 	if *recordDefaultPGO {
 		var err error
 		stopProfile, err = startDefaultPGORecording("default.pgo")
@@ -28,7 +32,7 @@ func main() {
 		defer stopProfile()
 	}
 
-    g := newGame()
+	g := newGame()
 	if *recordDefaultPGO {
 		g.enableAutoWalk(pgoRecordDuration)
 		go func(stop func()) {

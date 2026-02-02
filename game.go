@@ -13,8 +13,13 @@ import (
 type Game struct {
 	field *waveField
 
-	ex float64
-	ey float64
+	listenerX float64
+	listenerY float64
+
+	emitterX float64
+	emitterY float64
+
+	controlEmitter bool
 
 	stepTimer         int
 	lastSimDuration   time.Duration
@@ -50,12 +55,14 @@ type Game struct {
 	audioChunk    []float32
 }
 
+const minEmitterStartDistancePixels = 128
+
 // newGame constructs a fully initialized Game instance.
 func newGame() *Game {
 	g := &Game{
 		field:             newWaveField(w, h),
-		ex:                float64(w / 2),
-		ey:                float64(h / 2),
+		listenerX:         float64(w / 2),
+		listenerY:         float64(h / 2),
 		levelRand:         rand.New(rand.NewSource(time.Now().UnixNano() + 1)),
 		walls:             make([]bool, w*h),
 		listenerForwardX:  0,
@@ -95,26 +102,89 @@ func newGame() *Game {
 			}
 		}
 	}
+
 	g.generateWalls()
+	g.randomizeEmitterStart(minEmitterStartDistancePixels)
 	g.lastVisCX, g.lastVisCY = -1, -1
 	return g
 }
 
+func (g *Game) randomizeEmitterStart(minDist int) {
+	if g.levelRand == nil {
+		g.levelRand = rand.New(rand.NewSource(time.Now().UnixNano() + 6))
+	}
+	minX := emitterRad
+	maxX := w - emitterRad - 1
+	minY := emitterRad
+	maxY := h - emitterRad - 1
+	if minX >= maxX || minY >= maxY {
+		return
+	}
+	centerX := int(math.Round(g.listenerX))
+	centerY := int(math.Round(g.listenerY))
+	minDist2 := float64(minDist * minDist)
+
+	pick := func() (int, int) {
+		x := minX + g.levelRand.Intn(maxX-minX+1)
+		y := minY + g.levelRand.Intn(maxY-minY+1)
+		return x, y
+	}
+
+	for attempt := 0; attempt < 256; attempt++ {
+		x, y := pick()
+		dx := float64(x - centerX)
+		dy := float64(y - centerY)
+		if dx*dx+dy*dy < minDist2 {
+			continue
+		}
+		if !g.isWall(x, y) {
+			g.emitterX, g.emitterY = float64(x), float64(y)
+			return
+		}
+	}
+
+	// Fallback: scan for any valid non-wall cell satisfying the distance constraint.
+	for y := minY; y <= maxY; y++ {
+		for x := minX; x <= maxX; x++ {
+			dx := float64(x - centerX)
+			dy := float64(y - centerY)
+			if dx*dx+dy*dy < minDist2 {
+				continue
+			}
+			if g.isWall(x, y) {
+				continue
+			}
+			g.emitterX, g.emitterY = float64(x), float64(y)
+			return
+		}
+	}
+}
+
 // Update advances the simulation, produces optional audio, and refreshes visibility data.
 func (g *Game) Update() error {
+	g.handleControlToggle()
 	dx, dy := g.movementVector()
-	oldX, oldY := g.ex, g.ey
-	g.ex = math.Max(emitterRad, math.Min(float64(w-emitterRad-1), g.ex+dx))
-	g.ey = math.Max(emitterRad, math.Min(float64(h-emitterRad-1), g.ey+dy))
-	if g.isWall(int(g.ex), int(g.ey)) {
-		g.ex, g.ey = oldX, oldY
+	if g.controlEmitter {
+		oldX, oldY := g.emitterX, g.emitterY
+		g.emitterX = math.Max(emitterRad, math.Min(float64(w-emitterRad-1), g.emitterX+dx))
+		g.emitterY = math.Max(emitterRad, math.Min(float64(h-emitterRad-1), g.emitterY+dy))
+		if g.isWall(int(g.emitterX), int(g.emitterY)) {
+			g.emitterX, g.emitterY = oldX, oldY
+		}
+	} else {
+		oldX, oldY := g.listenerX, g.listenerY
+		g.listenerX = math.Max(emitterRad, math.Min(float64(w-emitterRad-1), g.listenerX+dx))
+		g.listenerY = math.Max(emitterRad, math.Min(float64(h-emitterRad-1), g.listenerY+dy))
+		if g.isWall(int(g.listenerX), int(g.listenerY)) {
+			g.listenerX, g.listenerY = oldX, oldY
+		}
 	}
 
 	g.handleDebugControls()
 
-	moving := dx != 0 || dy != 0
+	movingListener := !g.controlEmitter && (dx != 0 || dy != 0)
 	impulsesFired := false
-	if moving {
+	if movingListener {
 		length := math.Hypot(dx, dy)
 		if length > 0 {
 			g.listenerForwardX = dx / length
@@ -124,8 +194,8 @@ func (g *Game) Update() error {
 		if g.stepTimer >= stepDelay {
 			g.stepTimer = 0
 			if !(*disableWalkingPulsesFlag) {
-				baseX := int(g.ex)
-				baseY := int(g.ey)
+				baseX := int(g.listenerX)
+				baseY := int(g.listenerY)
 				for _, offset := range emitterFootprint {
 					cx := baseX + offset.dx
 					cy := baseY + offset.dy
@@ -168,7 +238,8 @@ func (g *Game) Update() error {
 		}
 	}
 
-	if err := g.gpuSolver.Step(g.field, g.walls, steps, g.wallsDirty, *showWallsFlag, *lastFrameOnlyFlag, *occludeLineOfSightFlag, visibleStamp, visibleGen, emitterData); err != nil {
+	listenerIndex, _ := g.listenerAudioIndex()
+	if err := g.gpuSolver.Step(g.field, g.walls, steps, g.wallsDirty, *showWallsFlag, *lastFrameOnlyFlag, *occludeLineOfSightFlag, visibleStamp, visibleGen, listenerIndex, emitterData); err != nil {
 		return err
 	}
 	if g.audioStream != nil && g.gpuSolver != nil {
@@ -224,14 +295,40 @@ func (g *Game) fillAudioChunk(size int) []float32 {
 	}
 	g.audioChunk = g.audioChunk[:size]
 	g.audioPressure.fillChunk(g.audioChunk)
+	gain := 1.0
+	if emitterGainFlag != nil {
+		gain = *emitterGainFlag
+	}
+	if gain != 1.0 {
+		gain32 := float32(gain)
+		for i, v := range g.audioChunk {
+			g.audioChunk[i] = v * gain32
+		}
+	}
 	return g.audioChunk
 }
 
 func (g *Game) emitterAudioIndex() (int32, bool) {
-	x := int(g.ex)
-	y := int(g.ey)
+	x := int(g.emitterX)
+	y := int(g.emitterY)
 	if x < 0 || x >= w || y < 0 || y >= h {
 		return -1, false
 	}
 	return int32(y*w + x), true
+}
+
+func (g *Game) listenerAudioIndex() (int32, bool) {
+	x := int(g.listenerX)
+	y := int(g.listenerY)
+	if x < 0 || x >= w || y < 0 || y >= h {
+		return -1, false
+	}
+	return int32(y*w + x), true
+}
+
+func (g *Game) controlModeLabel() string {
+	if g.controlEmitter {
+		return "emitter"
+	}
+	return "listener"
 }

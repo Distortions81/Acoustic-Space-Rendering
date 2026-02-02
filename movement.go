@@ -9,6 +9,26 @@ import (
 	"github.com/hajimehoshi/ebiten/v2/inpututil"
 )
 
+func (g *Game) handleControlToggle() {
+	if inpututil.IsKeyJustPressed(ebiten.KeyTab) {
+		g.controlEmitter = !g.controlEmitter
+	}
+}
+
+func movementStepCellsPerTick(speedMPS float64) float64 {
+	dxMeters := defaultCellSizeM
+	if cellSizeMFlag != nil {
+		dxMeters = *cellSizeMFlag
+	}
+	if dxMeters <= 0 {
+		dxMeters = defaultCellSizeM
+	}
+	if speedMPS < 0 {
+		speedMPS = 0
+	}
+	return speedMPS * (1.0 / defaultTPS) / dxMeters
+}
+
 // enableAutoWalk schedules scripted movement for a limited duration.
 func (g *Game) enableAutoWalk(duration time.Duration) {
 	g.autoWalk = true
@@ -35,22 +55,33 @@ func (g *Game) movementVector() (float64, float64) {
 func (g *Game) manualMovementVector() (float64, float64) {
 	dx, dy := 0.0, 0.0
 	if ebiten.IsKeyPressed(ebiten.KeyW) {
-		dy -= moveSpeed
+		dy -= 1
 	}
 	if ebiten.IsKeyPressed(ebiten.KeyS) {
-		dy += moveSpeed
+		dy += 1
 	}
 	if ebiten.IsKeyPressed(ebiten.KeyA) {
-		dx -= moveSpeed
+		dx -= 1
 	}
 	if ebiten.IsKeyPressed(ebiten.KeyD) {
-		dx += moveSpeed
+		dx += 1
 	}
 	if dx != 0 && dy != 0 {
 		dx *= 0.7071
 		dy *= 0.7071
 	}
-	return dx, dy
+	speedMPS := defaultRunSpeedMPS
+	if runSpeedMPSFlag != nil {
+		speedMPS = *runSpeedMPSFlag
+	}
+	if ebiten.IsKeyPressed(ebiten.KeyShiftLeft) || ebiten.IsKeyPressed(ebiten.KeyShiftRight) {
+		speedMPS = defaultWalkSpeedMPS
+		if walkSpeedMPSFlag != nil {
+			speedMPS = *walkSpeedMPSFlag
+		}
+	}
+	stepCells := movementStepCellsPerTick(speedMPS)
+	return dx * stepCells, dy * stepCells
 }
 
 // autoWalkVector returns a pseudo-random, collision-aware movement vector.
@@ -58,17 +89,22 @@ func (g *Game) autoWalkVector() (float64, float64) {
 	if g.autoWalkRand == nil {
 		g.autoWalkRand = rand.New(rand.NewSource(time.Now().UnixNano() + 4))
 	}
+	speedMPS := defaultRunSpeedMPS
+	if runSpeedMPSFlag != nil {
+		speedMPS = *runSpeedMPSFlag
+	}
+	stepCells := movementStepCellsPerTick(speedMPS)
 	for attempts := 0; attempts < 5; attempts++ {
 		if g.autoWalkFrameCount <= 0 {
 			g.randomizeAutoWalkDirection()
 		}
-		nextX := g.ex + g.autoWalkDirX*moveSpeed
-		nextY := g.ey + g.autoWalkDirY*moveSpeed
+		nextX := g.listenerX + g.autoWalkDirX*stepCells
+		nextY := g.listenerY + g.autoWalkDirY*stepCells
 		if nextX > float64(emitterRad) && nextX < float64(w-emitterRad-1) &&
 			nextY > float64(emitterRad) && nextY < float64(h-emitterRad-1) &&
 			!g.isWall(int(nextX), int(nextY)) {
 			g.autoWalkFrameCount--
-			return g.autoWalkDirX * moveSpeed, g.autoWalkDirY * moveSpeed
+			return g.autoWalkDirX * stepCells, g.autoWalkDirY * stepCells
 		}
 		g.autoWalkFrameCount = 0
 	}

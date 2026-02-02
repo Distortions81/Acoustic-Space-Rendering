@@ -18,8 +18,8 @@ func (g *Game) Draw(screen *ebiten.Image) {
 		}
 	}
 
-	baseX := int(g.ex)
-	baseY := int(g.ey)
+	baseX := int(g.emitterX)
+	baseY := int(g.emitterY)
 	for _, offset := range emitterFootprint {
 		cx := baseX + offset.dx
 		cy := baseY + offset.dy
@@ -27,7 +27,7 @@ func (g *Game) Draw(screen *ebiten.Image) {
 			screen.Set(cx, cy, color.RGBA{255, 0, 0, 255})
 		}
 	}
-	g.drawEarIndicators(screen, int(g.ex), int(g.ey))
+	g.drawEarIndicators(screen, int(g.listenerX), int(g.listenerY))
 	g.drawAudioSampleMarker(screen)
 
 	if *debugFlag {
@@ -42,8 +42,8 @@ func (g *Game) Draw(screen *ebiten.Image) {
 		}
 		simMS := g.lastSimDuration.Seconds() * 1000
 		simSteps := g.simStepsPerSecond()
-		debugMsg := fmt.Sprintf("FPS: %.1f\nSim speed: %.2fx (%.1f TPS)\nSim steps: %.1f/s (mult %dx, +/-)\nSim: %.2f ms",
-			fps, simMultiplier, tps, simSteps, g.simStepMultiplier, simMS)
+		debugMsg := fmt.Sprintf("FPS: %.1f\nSim speed: %.2fx (%.1f TPS)\nSim steps: %.1f/s (mult %dx, +/-)\nControl: %s (Tab)\nSim: %.2f ms",
+			fps, simMultiplier, tps, simSteps, g.simStepMultiplier, g.controlModeLabel(), simMS)
 		ebitenutil.DebugPrint(screen, debugMsg)
 	}
 }
@@ -69,8 +69,8 @@ func (g *Game) drawEarIndicators(screen *ebiten.Image, cx, cy int) {
 }
 
 func (g *Game) drawAudioSampleMarker(screen *ebiten.Image) {
-	centerX := w / 2
-	centerY := h / 2
+	centerX := clampCoord(int(g.listenerX), 0, w-1)
+	centerY := clampCoord(int(g.listenerY), 0, h-1)
 	dotColor := color.RGBA{255, 40, 40, 255}
 	for dy := -1; dy <= 1; dy++ {
 		y := centerY + dy
