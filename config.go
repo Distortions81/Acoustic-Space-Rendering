@@ -11,11 +11,11 @@ const (
 	defaultWorldWidthFeet    = 50
 	defaultCellSizeM         = defaultWorldWidthFeet * 0.3048 / float64(w)
 	defaultAirTempC          = 20.0
-	defaultRT60Seconds       = 1.2
+	defaultRT60Seconds       = 0.5
 	emitterRad               = 1
 	defaultWalkSpeedMPS      = 1.4
 	defaultRunSpeedMPS       = 3.0
-	defaultEmitterGain       = 0.5
+	defaultEmitterGain       = 1.0
 	stepDelay                = 60 / 4
 	defaultTPS               = 60.0
 	defaultSimMultiplier     = 735
@@ -35,7 +35,7 @@ const (
 	defaultWallThicknessJitM = 0.10
 	defaultWallExclusionM    = 0.5
 	defaultRoomWallMaterial  = "drywall"
-	defaultRoomWallReflect   = 0.96
+	defaultRoomWallReflect   = 0.90
 	pgoRecordDuration        = 15 * time.Second
 	sampleCaptureLogInterval = 500 * time.Millisecond
 	defaultAudioBufferMS     = 40

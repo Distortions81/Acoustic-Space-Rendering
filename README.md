@@ -88,7 +88,8 @@ Customize simulation behavior with additional flags:
 - `-cell-size-mm=<value>` — sets the physical size of one grid cell in millimeters (overrides `-cell-size-m` when `>0`).
 - `-world-width-ft=<value>` — sets the physical world width in feet (overrides cell size flags when `>0`).
 - `-air-temp-c=<value>` — sets air temperature in °C; used to compute speed of sound for the solver (default `20`).
-- `-rt60-s=<value>` — sets an approximate RT60 decay time in seconds; used to compute per-step damping (`<=0` disables damping; default `1.2`).
+- `-rt60-s=<value>` — sets an approximate RT60 decay time in seconds; used to compute per-step damping (`<=0` disables damping). When `-rt60-auto=true` and `-rt60-s` is not explicitly set, a derived RT60 is used instead.
+- `-rt60-auto=<true|false>` — when `true`, derive a more realistic RT60 default from world size (`-world-width-ft` / `-cell-size-*`) and `-room-wall-material` (default `true`).
 - `-run-speed-mps=<value>` — sets listener running speed in meters/second; used for WASD/autowalk movement (default `3.0`).
 - `-walk-speed-mps=<value>` — sets listener walking speed in meters/second while holding Shift (default `1.4`).
 - `-ear-directivity=<value>` — ear directionality strength (0–1) applied vs the emitter direction; `0` disables (default `0.8`).
@@ -99,7 +100,7 @@ Customize simulation behavior with additional flags:
 - `-room-wall-thickness-jitter-m=<value>` — random room wall thickness variation in meters (default `0.10`).
 - `-room-wall-exclusion-radius-m=<value>` — minimum distance from the listener to place room walls, in meters (default `0.5`).
 - `-room-wall-material=<value>` — room wall material preset (`drywall`, `concrete`, `brick`, `glass`, `wood`, `curtain`, `acoustic`); default is `drywall`.
-- `-room-wall-reflect=<value>` — amplitude reflection coefficient at room wall surfaces (0–1); overrides `-room-wall-material` when explicitly set; default is `0.96`.
+- `-room-wall-reflect=<value>` — amplitude reflection coefficient at room wall surfaces (0–1); overrides `-room-wall-material` when explicitly set; default is `0.90` (drywall preset).
 - `-prefer-fp16=<true|false>` — toggles 16-bit OpenCL wave buffers when the GPU advertises `cl_khr_fp16`/`cl_khr_half_float`. Leave enabled to reduce bandwidth on capable devices; set to `false` to force 32-bit floats.
 - `-enable-audio=<true|false>` — toggles experimental audio output driven by the simulator’s center samples; enable it to hear the impulse stream.
 - `-audio-loop=<path>` — when audio is enabled, specify a WAV file (RIFF/PCM) that is resampled to 44.1 kHz and used to drive the emitter’s pressure waveform; audio output still comes from the simulator’s center sample stream.

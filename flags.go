@@ -13,7 +13,7 @@ var (
 	worldBoundaryReflectFlag = flag.Float64("world-boundary-reflect", defaultBoundaryReflect, "amplitude reflection coefficient for the world boundary (0-1); used when -world-boundary-absorb=false")
 
 	// worldBoundaryAbsorbFlag forces the outer boundary to be absorbing (no reflection).
-	worldBoundaryAbsorbFlag = flag.Bool("world-boundary-absorb", false, "treat the world boundary as absorbing (overrides world boundary reflection when true)")
+	worldBoundaryAbsorbFlag = flag.Bool("world-boundary-absorb", true, "treat the world boundary as absorbing (overrides world boundary reflection when true)")
 
 	// preferFP16Flag enables 16-bit wave buffers on devices that support half precision.
 	preferFP16Flag = flag.Bool("prefer-fp16", false, "use 16-bit floats for the OpenCL solver when supported")
@@ -76,6 +76,9 @@ var (
 
 	// rt60SecondsFlag configures the target decay time used to compute per-step damping.
 	rt60SecondsFlag = flag.Float64("rt60-s", defaultRT60Seconds, "target RT60 decay time in seconds (controls per-step damping); <=0 disables damping")
+
+	// rt60AutoFlag derives a more realistic default RT60 when -rt60-s is not explicitly set.
+	rt60AutoFlag = flag.Bool("rt60-auto", true, "derive RT60 from world size and room wall material when -rt60-s is not explicitly set")
 
 	// runSpeedMPSFlag sets the listener running speed used when converting movement to grid cells.
 	runSpeedMPSFlag = flag.Float64("run-speed-mps", defaultRunSpeedMPS, "listener running speed in meters/second used for movement")
