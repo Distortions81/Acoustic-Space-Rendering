@@ -13,7 +13,7 @@ var (
 	worldBoundaryReflectFlag = flag.Float64("world-boundary-reflect", defaultBoundaryReflect, "amplitude reflection coefficient for the world boundary (0-1); used when -world-boundary-absorb=false")
 
 	// worldBoundaryAbsorbFlag forces the outer boundary to be absorbing (no reflection).
-	worldBoundaryAbsorbFlag = flag.Bool("world-boundary-absorb", true, "treat the world boundary as absorbing (overrides world boundary reflection when true)")
+	worldBoundaryAbsorbFlag = flag.Bool("world-boundary-absorb", false, "treat the world boundary as absorbing (overrides world boundary reflection when true)")
 
 	// preferFP16Flag enables 16-bit wave buffers on devices that support half precision.
 	preferFP16Flag = flag.Bool("prefer-fp16", false, "use 16-bit floats for the OpenCL solver when supported")
