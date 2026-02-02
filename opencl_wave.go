@@ -1126,14 +1126,14 @@ func (s *openCLWaveSolver) setRenderSource(lastFrameOnly bool) error {
 	return nil
 }
 
-func (s *openCLWaveSolver) Step(field *waveField, walls []bool, steps int, updateTPS float64, wallsDirty bool, showWalls bool, lastFrameOnly bool, occludeLOS bool, visibleStamp []uint32, visibleGen uint32, leftIndex int32, rightIndex int32, emitter *audioEmitterData) error {
+func (s *openCLWaveSolver) Step(field *waveField, walls []bool, steps int, dtSeconds float64, wallsDirty bool, showWalls bool, lastFrameOnly bool, occludeLOS bool, visibleStamp []uint32, visibleGen uint32, leftIndex int32, rightIndex int32, emitter *audioEmitterData) error {
 	if steps <= 0 {
 		return nil
 	}
-	if updateTPS <= 0 {
-		updateTPS = defaultTPS
+	if dtSeconds <= 0 {
+		dtSeconds = 1.0 / defaultTPS
 	}
-	coeffs, err := computeWaveCoefficients(updateTPS * float64(steps))
+	coeffs, err := computeWaveCoefficients(float64(steps) / dtSeconds)
 	if err != nil {
 		return err
 	}

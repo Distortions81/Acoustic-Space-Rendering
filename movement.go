@@ -15,23 +15,22 @@ func (g *Game) handleControlToggle() {
 	}
 }
 
-func tickSeconds() float64 {
-	tps := ebiten.ActualTPS()
-	if tps <= 0 {
-		tps = defaultTPS
+func (g *Game) tickSeconds() float64 {
+	if g != nil && g.lastUpdateDT > 0 {
+		return g.lastUpdateDT
 	}
-	if tps <= 0 {
+	if defaultTPS <= 0 {
 		return 0
 	}
-	return 1.0 / tps
+	return 1.0 / defaultTPS
 }
 
-func movementStepCellsPerTick(speedMPS float64) float64 {
+func (g *Game) movementStepCellsPerTick(speedMPS float64) float64 {
 	dxMeters := cellSizeMeters()
 	if speedMPS < 0 {
 		speedMPS = 0
 	}
-	dt := tickSeconds()
+	dt := g.tickSeconds()
 	if dt <= 0 {
 		return 0
 	}
@@ -89,7 +88,7 @@ func (g *Game) manualMovementVector() (float64, float64) {
 			speedMPS = *walkSpeedMPSFlag
 		}
 	}
-	stepCells := movementStepCellsPerTick(speedMPS)
+	stepCells := g.movementStepCellsPerTick(speedMPS)
 	return dx * stepCells, dy * stepCells
 }
 
@@ -102,7 +101,7 @@ func (g *Game) autoWalkVector() (float64, float64) {
 	if runSpeedMPSFlag != nil {
 		speedMPS = *runSpeedMPSFlag
 	}
-	stepCells := movementStepCellsPerTick(speedMPS)
+	stepCells := g.movementStepCellsPerTick(speedMPS)
 	for attempts := 0; attempts < 5; attempts++ {
 		if g.autoWalkFrameCount <= 0 {
 			g.randomizeAutoWalkDirection()
@@ -156,9 +155,9 @@ func (g *Game) adjustSimMultiplier(delta int) {
 
 // simStepsPerSecond returns the nominal simulation steps executed each second.
 func (g *Game) simStepsPerSecond() float64 {
-	tps := ebiten.ActualTPS()
-	if tps <= 0 {
-		tps = defaultTPS
+	dt := g.tickSeconds()
+	if dt <= 0 {
+		return 0
 	}
-	return tps * float64(g.simStepMultiplier)
+	return (1.0 / dt) * float64(g.simStepMultiplier)
 }

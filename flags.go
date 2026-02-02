@@ -39,6 +39,10 @@ var (
 	// enableAudioFlag toggles optional audio output driven by center samples.
 	enableAudioFlag = flag.Bool("enable-audio", true, "enable experimental audio output from center samples")
 
+	// audioBufferMSFlag controls the audio output buffer size. Lower values reduce
+	// latency but increase underrun risk.
+	audioBufferMSFlag = flag.Int("audio-buffer-ms", defaultAudioBufferMS, "audio output buffer size in milliseconds")
+
 	// audioLoopFlag lets the user provide a WAV file that will loop instead of the impulse samples.
 	audioLoopFlag = flag.String("audio-loop", "test2.wav", "path to a WAV file to loop when audio output is enabled")
 

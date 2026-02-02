@@ -6,7 +6,6 @@ import (
 	"math/rand"
 	"time"
 
-	"github.com/hajimehoshi/ebiten/v2"
 	"github.com/hajimehoshi/ebiten/v2/audio"
 )
 
@@ -55,6 +54,11 @@ type Game struct {
 	audioPressure *audioPressureSource
 	audioChunk    []float32
 	earChunk      []float32
+
+	stepCarry float64
+
+	lastUpdateTime time.Time
+	lastUpdateDT   float64
 }
 
 const minEmitterStartDistancePixels = 128
@@ -95,7 +99,16 @@ func newGame() *Game {
 			if err != nil {
 				log.Printf("Audio player creation failed: %v", err)
 			} else {
-				player.SetBufferSize(audioPlayerBufferLatency)
+				bufferMS := defaultAudioBufferMS
+				if audioBufferMSFlag != nil {
+					bufferMS = *audioBufferMSFlag
+				}
+				if bufferMS < 5 {
+					bufferMS = 5
+				} else if bufferMS > 200 {
+					bufferMS = 200
+				}
+				player.SetBufferSize(time.Duration(bufferMS) * time.Millisecond)
 				player.Play()
 				g.audioPlayer = player
 			}
@@ -164,6 +177,21 @@ func (g *Game) randomizeEmitterStart(minDist int) {
 
 // Update advances the simulation, produces optional audio, and refreshes visibility data.
 func (g *Game) Update() error {
+	now := time.Now()
+	if g.lastUpdateTime.IsZero() {
+		g.lastUpdateDT = 1.0 / defaultTPS
+	} else {
+		dt := now.Sub(g.lastUpdateTime).Seconds()
+		// Clamp to keep the simulation from exploding after stalls.
+		if dt < 0 {
+			dt = 0
+		} else if dt > 0.1 {
+			dt = 0.1
+		}
+		g.lastUpdateDT = dt
+	}
+	g.lastUpdateTime = now
+
 	g.handleControlToggle()
 	dx, dy := g.movementVector()
 	if g.controlEmitter {
@@ -223,7 +251,22 @@ func (g *Game) Update() error {
 		g.refreshVisibleMask()
 	}
 
-	steps := g.simStepMultiplier
+	targetStepsPerSecond := defaultTPS * float64(g.simStepMultiplier)
+	if g.audioStream != nil && captureStepSamplesFlag != nil && *captureStepSamplesFlag {
+		targetStepsPerSecond = audioSampleRate
+	}
+	stepsFloat := targetStepsPerSecond * g.lastUpdateDT
+	if stepsFloat < 1 {
+		stepsFloat = 1
+	}
+	g.stepCarry += stepsFloat
+	steps := int(math.Floor(g.stepCarry))
+	g.stepCarry -= float64(steps)
+	if steps < minSimMultiplier {
+		steps = minSimMultiplier
+	} else if steps > maxSimMultiplier {
+		steps = maxSimMultiplier
+	}
 	simStart := time.Now()
 	var visibleStamp []uint32
 	var visibleGen uint32
@@ -241,11 +284,7 @@ func (g *Game) Update() error {
 	}
 
 	leftIndex, rightIndex, _ := g.listenerEarIndices()
-	updateTPS := ebiten.ActualTPS()
-	if updateTPS <= 0 {
-		updateTPS = defaultTPS
-	}
-	if err := g.gpuSolver.Step(g.field, g.walls, steps, updateTPS, g.wallsDirty, *showWallsFlag, *lastFrameOnlyFlag, *occludeLineOfSightFlag, visibleStamp, visibleGen, leftIndex, rightIndex, emitterData); err != nil {
+	if err := g.gpuSolver.Step(g.field, g.walls, steps, g.lastUpdateDT, g.wallsDirty, *showWallsFlag, *lastFrameOnlyFlag, *occludeLineOfSightFlag, visibleStamp, visibleGen, leftIndex, rightIndex, emitterData); err != nil {
 		return err
 	}
 	earGainL, earGainR := g.earDirectivityGains()

@@ -6,7 +6,7 @@ import "time"
 // application. These values define the grid size and timing for
 // the acoustic wave simulation.
 const (
-	w, h                     = 640, 640
+	w, h                     = 512, 512
 	windowScale              = 2
 	defaultWorldWidthFeet    = 50
 	defaultCellSizeM         = defaultWorldWidthFeet * 0.3048 / float64(w)
@@ -28,7 +28,7 @@ const (
 	defaultAirAbsDbPerM      = 0.01
 	visualGamma              = 1.0
 	stepImpulseStrength      = 20.0
-	defaultWallSegments      = 10
+	defaultWallSegments      = 5
 	defaultWallMinLenM       = 1.0
 	defaultWallMaxLenM       = 12.0
 	defaultWallThicknessM    = 0.15
@@ -38,7 +38,7 @@ const (
 	defaultRoomWallReflect   = 0.96
 	pgoRecordDuration        = 15 * time.Second
 	sampleCaptureLogInterval = 500 * time.Millisecond
-	audioPlayerBufferLatency = 40 * time.Millisecond
+	defaultAudioBufferMS     = 40
 )
 
 var worldBoundaryReflect = defaultBoundaryReflect
