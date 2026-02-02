@@ -47,6 +47,15 @@ func main() {
 	if roomWallExclusionRadiusMFlag != nil {
 		roomWallExclusionM = *roomWallExclusionRadiusMFlag
 	}
+	roomWallReflect = defaultRoomWallReflect
+	if roomWallReflectFlag != nil {
+		roomWallReflect = *roomWallReflectFlag
+	}
+	if roomWallReflect < 0 {
+		roomWallReflect = 0
+	} else if roomWallReflect > 1 {
+		roomWallReflect = 1
+	}
 	var stopProfile func()
 	if *recordDefaultPGO {
 		var err error

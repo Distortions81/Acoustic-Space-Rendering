@@ -94,6 +94,7 @@ Customize simulation behavior with additional flags:
 - `-room-wall-thickness-m=<value>` — approximate room wall thickness in meters (default `0.15`).
 - `-room-wall-thickness-jitter-m=<value>` — random room wall thickness variation in meters (default `0.10`).
 - `-room-wall-exclusion-radius-m=<value>` — minimum distance from the listener to place room walls, in meters (default `0.5`).
+- `-room-wall-reflect=<value>` — amplitude reflection coefficient at room wall surfaces (0–1); default is `0.98`.
 - `-prefer-fp16=<true|false>` — toggles 16-bit OpenCL wave buffers when the GPU advertises `cl_khr_fp16`/`cl_khr_half_float`. Leave enabled to reduce bandwidth on capable devices; set to `false` to force 32-bit floats.
 - `-enable-audio=<true|false>` — toggles experimental audio output driven by the simulator’s center samples; enable it to hear the impulse stream.
 - `-audio-loop=<path>` — when audio is enabled, specify a WAV file (RIFF/PCM) that is resampled to 44.1 kHz and used to drive the emitter’s pressure waveform; audio output still comes from the simulator’s center sample stream.

@@ -75,6 +75,7 @@ type openCLWaveSolver struct {
 	lastSampleCount         int
 	lastDamp                float32
 	lastSpeed               float32
+	lastRoomWallReflect     float32
 	warnedCoeffClamp        bool
 	sampleIndexL            int32
 	sampleIndexR            int32
@@ -103,6 +104,7 @@ __kernel void wave_step(
     const int height,
     const float damp,
     const float speed,
+    const float room_wall_reflect,
     __global const real_t* curr,
     __global const real_t* prev,
     __global real_t* next_buffer,
@@ -129,10 +131,27 @@ __kernel void wave_step(
     int bottom = idx + width;
     const real_t damp_r = to_real(damp);
     const real_t speed_r = to_real(speed);
+    const real_t wall_reflect_r = to_real(room_wall_reflect);
     const real_t two = to_real(2.0f);
     const real_t four = to_real(4.0f);
     real_t center = curr[idx];
-    real_t laplacian = curr[left] + curr[right] + curr[top] + curr[bottom] - four * center;
+    real_t nL = curr[left];
+    real_t nR = curr[right];
+    real_t nT = curr[top];
+    real_t nB = curr[bottom];
+    if (wall_mask[left]) {
+        nL = center * wall_reflect_r;
+    }
+    if (wall_mask[right]) {
+        nR = center * wall_reflect_r;
+    }
+    if (wall_mask[top]) {
+        nT = center * wall_reflect_r;
+    }
+    if (wall_mask[bottom]) {
+        nB = center * wall_reflect_r;
+    }
+    real_t laplacian = nL + nR + nT + nB - four * center;
     real_t next_val = ((two * center - prev[idx]) + speed_r * laplacian) * damp_r;
     if (emitter_index >= 0) {
         int ex = emitter_index % width;
@@ -636,6 +655,7 @@ func newOpenCLWaveSolver(width, height int) (*openCLWaveSolver, error) {
 		int32(height),
 		coeffs.DampPerStep,
 		coeffs.SpeedCoeff,
+		float32(roomWallReflect),
 		solver.currBuf,
 		solver.prevBuf,
 		solver.nextBuf,
@@ -650,6 +670,7 @@ func newOpenCLWaveSolver(width, height int) (*openCLWaveSolver, error) {
 	}
 	solver.lastDamp = coeffs.DampPerStep
 	solver.lastSpeed = coeffs.SpeedCoeff
+	solver.lastRoomWallReflect = float32(roomWallReflect)
 	if err := solver.renderKernel.SetArgs(
 		int32(width),
 		int32(height),
@@ -904,7 +925,7 @@ func (s *openCLWaveSolver) sampleCenter(step int) error {
 }
 
 func (s *openCLWaveSolver) setEmitterArgs(index int32, value float32) error {
-	if err := s.kernel.SetArgInt32(8, index); err != nil {
+	if err := s.kernel.SetArgInt32(9, index); err != nil {
 		return err
 	}
 	return s.setEmitterValue(value)
@@ -913,26 +934,26 @@ func (s *openCLWaveSolver) setEmitterArgs(index int32, value float32) error {
 func (s *openCLWaveSolver) setEmitterValue(val float32) error {
 	if s.useFP16 {
 		half := float32ToFloat16Bits(val)
-		return s.kernel.SetArgUnsafe(9, int(unsafe.Sizeof(half)), unsafe.Pointer(&half))
+		return s.kernel.SetArgUnsafe(10, int(unsafe.Sizeof(half)), unsafe.Pointer(&half))
 	}
-	return s.kernel.SetArgFloat32(9, val)
+	return s.kernel.SetArgFloat32(10, val)
 }
 
 func (s *openCLWaveSolver) bindDynamicBuffers() error {
 	if s.boundCurr != s.currBuf {
-		if err := s.kernel.SetArgBuffer(4, s.currBuf); err != nil {
+		if err := s.kernel.SetArgBuffer(5, s.currBuf); err != nil {
 			return err
 		}
 		s.boundCurr = s.currBuf
 	}
 	if s.boundPrev != s.prevBuf {
-		if err := s.kernel.SetArgBuffer(5, s.prevBuf); err != nil {
+		if err := s.kernel.SetArgBuffer(6, s.prevBuf); err != nil {
 			return err
 		}
 		s.boundPrev = s.prevBuf
 	}
 	if s.boundNext != s.nextBuf {
-		if err := s.kernel.SetArgBuffer(6, s.nextBuf); err != nil {
+		if err := s.kernel.SetArgBuffer(7, s.nextBuf); err != nil {
 			return err
 		}
 		s.boundNext = s.nextBuf
@@ -955,6 +976,19 @@ func (s *openCLWaveSolver) setWaveCoefficients(damp, speed float32) error {
 			return err
 		}
 		s.lastSpeed = speed
+	}
+	return nil
+}
+
+func (s *openCLWaveSolver) setRoomWallReflect(reflect float32) error {
+	if s.kernel == nil {
+		return nil
+	}
+	if reflect != s.lastRoomWallReflect {
+		if err := s.kernel.SetArgFloat32(4, reflect); err != nil {
+			return err
+		}
+		s.lastRoomWallReflect = reflect
 	}
 	return nil
 }
@@ -1100,6 +1134,9 @@ func (s *openCLWaveSolver) Step(field *waveField, walls []bool, steps int, walls
 	}
 	if err := s.setWaveCoefficients(coeffs.DampPerStep, coeffs.SpeedCoeff); err != nil {
 		return fmt.Errorf("setting wave coefficients: %w", err)
+	}
+	if err := s.setRoomWallReflect(float32(roomWallReflect)); err != nil {
+		return fmt.Errorf("setting room wall reflect: %w", err)
 	}
 	size := s.width * s.height
 	if len(field.curr) != size || len(field.prev) != size || len(field.next) != size {

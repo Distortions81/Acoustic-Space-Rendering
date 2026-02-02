@@ -32,6 +32,7 @@ const (
 	defaultWallThicknessM    = 0.15
 	defaultWallThicknessJitM = 0.10
 	defaultWallExclusionM    = 0.5
+	defaultRoomWallReflect   = 0.98
 	pgoRecordDuration        = 15 * time.Second
 	sampleCaptureLogInterval = 500 * time.Millisecond
 	audioPlayerBufferLatency = 40 * time.Millisecond
@@ -46,4 +47,5 @@ var (
 	roomWallThicknessM    = defaultWallThicknessM
 	roomWallThicknessJitM = defaultWallThicknessJitM
 	roomWallExclusionM    = defaultWallExclusionM
+	roomWallReflect       = defaultRoomWallReflect
 )
