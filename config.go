@@ -15,7 +15,7 @@ const (
 	emitterRad                = 1
 	defaultWalkSpeedMPS       = 1.4
 	defaultRunSpeedMPS        = 3.0
-	defaultEmitterGain        = 1.0
+	defaultEmitterGain        = 0.2
 	stepDelay                 = 60 / 4
 	defaultTPS                = 60.0
 	defaultSimMultiplier      = 735
