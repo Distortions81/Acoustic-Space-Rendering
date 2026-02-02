@@ -32,7 +32,7 @@ main files and functions in the repository.
   - An OpenCL context, command queue, and compiled program.
   - Device buffers mirroring the CPU field (`currBuf`, `prevBuf`, `nextBuf`).
   - Extra buffers for pixels, accumulated intensity, wall masks, visibility
-    masks, impulses, and center samples.
+    masks, impulses, and ear sample capture.
 - `newOpenCLWaveSolver`:
   - Chooses an OpenCL device (GPU when available, otherwise CPU).
   - Builds kernels from the string `waveKernelSource`.
@@ -41,7 +41,7 @@ main files and functions in the repository.
     advertises `cl_khr_fp16` or `cl_khr_half_float`.
 - The solver exposes a single high‑level entry point:
   - `(*openCLWaveSolver).Step` runs one batch of simulation steps and prepares
-    pixels and center samples for the host.
+    pixels and ear samples for the host.
 
 ### Discrete Wave Equation
 
@@ -237,7 +237,7 @@ Each Ebiten tick, `Game.Update` in `game.go` performs the following steps:
        `applyQueuedImpulses` and `apply_impulses`.
      - Uploads or refreshes the wall and visibility masks if needed.
      - Clears the accumulation buffer.
-     - Prepares center sample capture if the `-capture-step-samples` flag is
+     - Prepares ear sample capture if the `-capture-step-samples` flag is
        enabled.
      - Loops `steps` times:
        - Configures the emitter value for this substep, if any.
@@ -251,9 +251,9 @@ Each Ebiten tick, `Game.Update` in `game.go` performs the following steps:
          this substep.
 
 6. **Readback of samples and pixels**
-   - If per‑step center sampling is enabled, the solver reads the entire
-     sequence of center samples into `hostCenterSamples`. Otherwise, it reads
-     a single sample from the center cell of the current buffer.
+   - If per‑step sampling is enabled, the solver reads an interleaved sequence
+     of left/right ear samples from the listener’s ear offsets. Otherwise, it
+     reads a single left/right pair for the current buffer.
    - It configures the render kernel to use either the accumulation buffer
      (for blended visualization) or the current buffer (for a single
      wavefront), based on the `-show-last-frame` flag.
@@ -264,9 +264,8 @@ Each Ebiten tick, `Game.Update` in `game.go` performs the following steps:
 
 7. **Audio output**
    - Back in `Game.Update`, if a `centerAudioStream` is active:
-     - `CenterSample` is written as a single sample each frame.
-     - If `-capture-step-samples` is enabled, all per‑step center samples
-       from the last batch are enqueued instead.
+     - When `-capture-step-samples` is enabled, the last batch’s per‑step
+       left/right ear frames are enqueued as interleaved stereo.
    - `centerAudioStream` implements the `io.ReadCloser` interface expected by
      Ebiten’s audio player:
      - `Read` consumes pending samples at the audio device rate, applies a

@@ -238,20 +238,20 @@ func (g *Game) Update() error {
 		}
 	}
 
-	listenerIndex, _ := g.listenerAudioIndex()
-	if err := g.gpuSolver.Step(g.field, g.walls, steps, g.wallsDirty, *showWallsFlag, *lastFrameOnlyFlag, *occludeLineOfSightFlag, visibleStamp, visibleGen, listenerIndex, emitterData); err != nil {
+	leftIndex, rightIndex, _ := g.listenerEarIndices()
+	if err := g.gpuSolver.Step(g.field, g.walls, steps, g.wallsDirty, *showWallsFlag, *lastFrameOnlyFlag, *occludeLineOfSightFlag, visibleStamp, visibleGen, leftIndex, rightIndex, emitterData); err != nil {
 		return err
 	}
-	if g.audioStream != nil && g.gpuSolver != nil {
-		g.audioStream.SetSample(g.gpuSolver.CenterSample())
-	}
 	if captureStepSamplesFlag != nil && *captureStepSamplesFlag && g.gpuSolver != nil {
-		if samples := g.gpuSolver.CenterSamples(); len(samples) > 0 {
+		if samples := g.gpuSolver.EarSamplesInterleaved(); len(samples) > 0 {
 			if g.audioStream != nil {
-				g.audioStream.Enqueue(samples)
+				g.audioStream.EnqueueInterleaved(samples)
 			}
-			g.logCapturedCenterSamples(samples)
+			g.logCapturedEarSamples(samples)
 		}
+	} else if g.audioStream != nil && g.gpuSolver != nil {
+		left, right := g.gpuSolver.EarSample()
+		g.audioStream.SetStereo(left, right)
 	}
 	g.wallsDirty = false
 	g.lastSimDuration = time.Since(simStart)
@@ -259,30 +259,46 @@ func (g *Game) Update() error {
 	return nil
 }
 
-func (g *Game) logCapturedCenterSamples(samples []float32) {
-	if len(samples) == 0 {
+func (g *Game) logCapturedEarSamples(samples []float32) {
+	if len(samples) < 2 {
 		return
 	}
 	now := time.Now()
 	if now.Sub(g.lastSampleLog) < sampleCaptureLogInterval {
 		return
 	}
-	minVal := samples[0]
-	maxVal := samples[0]
-	var sum float32
-	for _, v := range samples {
-		if v < minVal {
-			minVal = v
+	minL := samples[0]
+	maxL := samples[0]
+	minR := samples[1]
+	maxR := samples[1]
+	var sumL float32
+	var sumR float32
+	frames := len(samples) / 2
+	for i := 0; i < frames; i++ {
+		base := i * 2
+		lv := samples[base]
+		rv := samples[base+1]
+		if lv < minL {
+			minL = lv
 		}
-		if v > maxVal {
-			maxVal = v
+		if lv > maxL {
+			maxL = lv
 		}
-		sum += v
+		if rv < minR {
+			minR = rv
+		}
+		if rv > maxR {
+			maxR = rv
+		}
+		sumL += lv
+		sumR += rv
 	}
-	avg := sum / float32(len(samples))
-	last := samples[len(samples)-1]
-	log.Printf("Captured %d center samples (min %.3f max %.3f avg %.3f last %.3f)",
-		len(samples), minVal, maxVal, avg, last)
+	avgL := sumL / float32(frames)
+	avgR := sumR / float32(frames)
+	lastL := samples[(frames-1)*2]
+	lastR := samples[(frames-1)*2+1]
+	log.Printf("Captured %d ear frames (L min %.3f max %.3f avg %.3f last %.3f; R min %.3f max %.3f avg %.3f last %.3f)",
+		frames, minL, maxL, avgL, lastL, minR, maxR, avgR, lastR)
 	g.lastSampleLog = now
 }
 
@@ -324,6 +340,17 @@ func (g *Game) listenerAudioIndex() (int32, bool) {
 		return -1, false
 	}
 	return int32(y*w + x), true
+}
+
+func (g *Game) listenerEarIndices() (int32, int32, bool) {
+	cx := clampCoord(int(math.Round(g.listenerX)), 0, w-1)
+	cy := clampCoord(int(math.Round(g.listenerY)), 0, h-1)
+	ox, oy := g.earOffsets()
+	leftX := clampCoord(cx-ox, 0, w-1)
+	leftY := clampCoord(cy-oy, 0, h-1)
+	rightX := clampCoord(cx+ox, 0, w-1)
+	rightY := clampCoord(cy+oy, 0, h-1)
+	return int32(leftY*w + leftX), int32(rightY*w + rightX), true
 }
 
 func (g *Game) controlModeLabel() string {

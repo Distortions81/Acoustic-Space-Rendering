@@ -29,7 +29,7 @@ var (
 	fovDegreesFlag = flag.Float64("fov-deg", 90.0, "field of view angle for LOS (degrees)")
 
 	// lastFrameOnlyFlag forces the renderer to show only the most recent frame.
-	lastFrameOnlyFlag = flag.Bool("show-last-frame", true, "render only the latest simulation frame instead of the blended accumulation")
+	lastFrameOnlyFlag = flag.Bool("show-last-frame", false, "render only the latest simulation frame instead of the blended accumulation")
 
 	// debugFlag enables the FPS and simulation overlay.
 	debugFlag = flag.Bool("debug", true, "show FPS and simulation speed overlay")

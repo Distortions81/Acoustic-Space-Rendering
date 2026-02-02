@@ -26,7 +26,7 @@ type openCLWaveSolver struct {
 	nextBuf                 *cl.MemObject
 	pixelBuf                *cl.MemObject
 	accumBuf                *cl.MemObject
-	centerSampleBuf         *cl.MemObject
+	earSampleBuf            *cl.MemObject
 	wallMaskBuf             *cl.MemObject
 	visibilityBuf           *cl.MemObject
 	impulseIndexBuf         *cl.MemObject
@@ -47,8 +47,9 @@ type openCLWaveSolver struct {
 	hostPixels              []byte
 	hostWallMask            []byte
 	hostVisibility          []byte
-	hostCenterSamples       []float32
-	hostCenterSamplesHalf   []uint16
+	hostEarSamples          []float32
+	hostEarSamplesHalf      []uint16
+	hostCenterMono          []float32
 	pixelMu                 sync.Mutex
 	pixelEvent              *cl.Event
 	uploadedVisibleGen      uint32
@@ -68,12 +69,15 @@ type openCLWaveSolver struct {
 	hostNextHalf            []uint16
 	impulseCurrHalf         []uint16
 	impulsePrevHalf         []uint16
+	earLeftSample           float32
+	earRightSample          float32
 	centerSample            float32
 	lastSampleCount         int
 	lastDamp                float32
 	lastSpeed               float32
 	warnedCoeffClamp        bool
-	sampleIndex             int32
+	sampleIndexL            int32
+	sampleIndexR            int32
 }
 
 type audioEmitterData struct {
@@ -256,9 +260,10 @@ __kernel void boundary_accumulate(
     accum[idx] += scaled;
 }
 
-__kernel void sample_center(
+__kernel void sample_ears(
     const int step_index,
-    const int sample_index,
+    const int left_index,
+    const int right_index,
     const int size,
     __global const real_t* curr,
     __global real_t* samples)
@@ -266,10 +271,17 @@ __kernel void sample_center(
     if (step_index < 0) {
         return;
     }
-    if (sample_index < 0 || sample_index >= size) {
-        return;
+    int base = step_index * 2;
+    real_t left = (real_t)0.0f;
+    real_t right = (real_t)0.0f;
+    if (left_index >= 0 && left_index < size) {
+        left = curr[left_index];
     }
-    samples[step_index] = curr[sample_index];
+    if (right_index >= 0 && right_index < size) {
+        right = curr[right_index];
+    }
+    samples[base] = left;
+    samples[base + 1] = right;
 }
 `
 
@@ -523,10 +535,10 @@ func newOpenCLWaveSolver(width, height int) (*openCLWaveSolver, error) {
 		return nil, fmt.Errorf("allocating impulse value buffer: %w", err)
 	}
 
-	var centerSampleBuf *cl.MemObject
+	var earSampleBuf *cl.MemObject
 	var sampleKernel *cl.Kernel
 	if captureStepSamplesFlag != nil && *captureStepSamplesFlag {
-		centerSampleBuf, err = context.CreateEmptyBuffer(cl.MemReadWrite, maxSimMultiplier*elementBytes)
+		earSampleBuf, err = context.CreateEmptyBuffer(cl.MemReadWrite, maxSimMultiplier*2*elementBytes)
 		if err != nil {
 			impulseValueBuf.Release()
 			impulseIndexBuf.Release()
@@ -544,12 +556,12 @@ func newOpenCLWaveSolver(width, height int) (*openCLWaveSolver, error) {
 			program.Release()
 			queue.Release()
 			context.Release()
-			return nil, fmt.Errorf("allocating center sample buffer: %w", err)
+			return nil, fmt.Errorf("allocating ear sample buffer: %w", err)
 		}
 
-		sampleKernel, err = program.CreateKernel("sample_center")
+		sampleKernel, err = program.CreateKernel("sample_ears")
 		if err != nil {
-			centerSampleBuf.Release()
+			earSampleBuf.Release()
 			impulseValueBuf.Release()
 			impulseIndexBuf.Release()
 			visibilityBuf.Release()
@@ -585,7 +597,7 @@ func newOpenCLWaveSolver(width, height int) (*openCLWaveSolver, error) {
 		nextBuf:                 nextBuf,
 		pixelBuf:                pixelBuf,
 		accumBuf:                accumBuf,
-		centerSampleBuf:         centerSampleBuf,
+		earSampleBuf:            earSampleBuf,
 		wallMaskBuf:             wallMaskBuf,
 		visibilityBuf:           visibilityBuf,
 		impulseIndexBuf:         impulseIndexBuf,
@@ -864,22 +876,25 @@ func (s *openCLWaveSolver) applyQueuedImpulses(field *waveField) error {
 }
 
 func (s *openCLWaveSolver) sampleCenter(step int) error {
-	if s.sampleKernel == nil || s.centerSampleBuf == nil {
+	if s.sampleKernel == nil || s.earSampleBuf == nil {
 		return nil
 	}
 	if err := s.sampleKernel.SetArgInt32(0, int32(step)); err != nil {
 		return fmt.Errorf("setting sample step index: %w", err)
 	}
-	if err := s.sampleKernel.SetArgInt32(1, int32(s.sampleIndex)); err != nil {
-		return fmt.Errorf("setting sample index: %w", err)
+	if err := s.sampleKernel.SetArgInt32(1, s.sampleIndexL); err != nil {
+		return fmt.Errorf("setting sample left index: %w", err)
 	}
-	if err := s.sampleKernel.SetArgInt32(2, int32(s.width*s.height)); err != nil {
+	if err := s.sampleKernel.SetArgInt32(2, s.sampleIndexR); err != nil {
+		return fmt.Errorf("setting sample right index: %w", err)
+	}
+	if err := s.sampleKernel.SetArgInt32(3, int32(s.width*s.height)); err != nil {
 		return fmt.Errorf("setting sample size: %w", err)
 	}
-	if err := s.sampleKernel.SetArgBuffer(3, s.currBuf); err != nil {
+	if err := s.sampleKernel.SetArgBuffer(4, s.currBuf); err != nil {
 		return fmt.Errorf("binding sample source buffer: %w", err)
 	}
-	if err := s.sampleKernel.SetArgBuffer(4, s.centerSampleBuf); err != nil {
+	if err := s.sampleKernel.SetArgBuffer(5, s.earSampleBuf); err != nil {
 		return fmt.Errorf("binding sample target buffer: %w", err)
 	}
 	if _, err := s.queue.EnqueueNDRangeKernel(s.sampleKernel, nil, []int{1}, nil, nil); err != nil {
@@ -1070,7 +1085,7 @@ func (s *openCLWaveSolver) setRenderSource(lastFrameOnly bool) error {
 	return nil
 }
 
-func (s *openCLWaveSolver) Step(field *waveField, walls []bool, steps int, wallsDirty bool, showWalls bool, lastFrameOnly bool, occludeLOS bool, visibleStamp []uint32, visibleGen uint32, listenerIndex int32, emitter *audioEmitterData) error {
+func (s *openCLWaveSolver) Step(field *waveField, walls []bool, steps int, wallsDirty bool, showWalls bool, lastFrameOnly bool, occludeLOS bool, visibleStamp []uint32, visibleGen uint32, leftIndex int32, rightIndex int32, emitter *audioEmitterData) error {
 	if steps <= 0 {
 		return nil
 	}
@@ -1090,10 +1105,15 @@ func (s *openCLWaveSolver) Step(field *waveField, walls []bool, steps int, walls
 	if len(field.curr) != size || len(field.prev) != size || len(field.next) != size {
 		return fmt.Errorf("unexpected field buffer size")
 	}
-	if listenerIndex < 0 || int(listenerIndex) >= size {
-		listenerIndex = int32((s.height/2)*s.width + (s.width / 2))
+	defaultIndex := int32((s.height/2)*s.width + (s.width / 2))
+	if leftIndex < 0 || int(leftIndex) >= size {
+		leftIndex = defaultIndex
 	}
-	s.sampleIndex = listenerIndex
+	if rightIndex < 0 || int(rightIndex) >= size {
+		rightIndex = defaultIndex
+	}
+	s.sampleIndexL = leftIndex
+	s.sampleIndexR = rightIndex
 	var emitterIndex int32 = -1
 	var emitterSamples []float32
 	if emitter != nil && emitter.index >= 0 && len(emitter.samples) > 0 {
@@ -1164,15 +1184,17 @@ func (s *openCLWaveSolver) Step(field *waveField, walls []bool, steps int, walls
 	if steps > 0 {
 		scale = 1 / float32(steps)
 	}
-	if steps > 0 && s.sampleKernel != nil && s.centerSampleBuf != nil {
+	if steps > 0 && s.sampleKernel != nil && s.earSampleBuf != nil {
 		s.lastSampleCount = steps
-		s.hostCenterSamples = ensureFloat32Slice(s.hostCenterSamples, steps)
+		s.hostEarSamples = ensureFloat32Slice(s.hostEarSamples, steps*2)
 		if s.useFP16 {
-			s.hostCenterSamplesHalf = ensureUint16Slice(s.hostCenterSamplesHalf, steps)
+			s.hostEarSamplesHalf = ensureUint16Slice(s.hostEarSamplesHalf, steps*2)
 		}
 	} else {
 		s.lastSampleCount = 0
 		s.centerSample = 0
+		s.earLeftSample = 0
+		s.earRightSample = 0
 	}
 	reflect32 := float32(boundaryReflect)
 	if err := s.setEmitterArgs(emitterIndex, 0); err != nil {
@@ -1197,42 +1219,47 @@ func (s *openCLWaveSolver) Step(field *waveField, walls []bool, steps int, walls
 			if err := s.runBoundaryAccumulate(accumGlobal, scale, reflect32); err != nil {
 				return err
 			}
-			if s.sampleKernel != nil && s.centerSampleBuf != nil {
+			if s.sampleKernel != nil && s.earSampleBuf != nil {
 				if err := s.sampleCenter(step); err != nil {
 					return err
 				}
 			}
 		}
 	}
-	if steps > 0 && s.sampleKernel != nil && s.centerSampleBuf != nil {
-		byteLen := steps * s.elementBytes
+	if steps > 0 && s.sampleKernel != nil && s.earSampleBuf != nil {
+		byteLen := steps * 2 * s.elementBytes
 		if s.useFP16 {
-			if _, err := s.queue.EnqueueReadBuffer(s.centerSampleBuf, true, 0, byteLen, unsafe.Pointer(&s.hostCenterSamplesHalf[0]), nil); err != nil {
-				return fmt.Errorf("reading center samples (fp16): %w", err)
+			if _, err := s.queue.EnqueueReadBuffer(s.earSampleBuf, true, 0, byteLen, unsafe.Pointer(&s.hostEarSamplesHalf[0]), nil); err != nil {
+				return fmt.Errorf("reading ear samples (fp16): %w", err)
 			}
-			float16ToFloat32(s.hostCenterSamples, s.hostCenterSamplesHalf)
+			float16ToFloat32(s.hostEarSamples, s.hostEarSamplesHalf)
 		} else {
-			if _, err := s.queue.EnqueueReadBufferFloat32(s.centerSampleBuf, true, 0, s.hostCenterSamples[:steps], nil); err != nil {
-				return fmt.Errorf("reading center samples: %w", err)
+			if _, err := s.queue.EnqueueReadBufferFloat32(s.earSampleBuf, true, 0, s.hostEarSamples[:steps*2], nil); err != nil {
+				return fmt.Errorf("reading ear samples: %w", err)
 			}
 		}
-		s.centerSample = s.hostCenterSamples[steps-1]
+		base := (steps - 1) * 2
+		s.earLeftSample = s.hostEarSamples[base]
+		s.earRightSample = s.hostEarSamples[base+1]
+		s.centerSample = 0.5 * (s.earLeftSample + s.earRightSample)
 	} else if steps > 0 && size > 0 && s.width > 0 && s.height > 0 {
 		// Fallback: sample a single center value from the current buffer when
 		// per-step sampling is disabled.
-		offset := int(listenerIndex) * s.elementBytes
-		if s.useFP16 {
-			var raw uint16
-			if _, err := s.queue.EnqueueReadBuffer(s.currBuf, true, offset, s.elementBytes, unsafe.Pointer(&raw), nil); err == nil {
-				v := float16BitsToFloat32(raw)
-				if v > 1 {
-					v = 1
-				} else if v < -1 {
-					v = -1
+		readOne := func(index int32) float32 {
+			offset := int(index) * s.elementBytes
+			if s.useFP16 {
+				var raw uint16
+				if _, err := s.queue.EnqueueReadBuffer(s.currBuf, true, offset, s.elementBytes, unsafe.Pointer(&raw), nil); err == nil {
+					v := float16BitsToFloat32(raw)
+					if v > 1 {
+						v = 1
+					} else if v < -1 {
+						v = -1
+					}
+					return v
 				}
-				s.centerSample = v
+				return 0
 			}
-		} else {
 			var v float32
 			if _, err := s.queue.EnqueueReadBuffer(s.currBuf, true, offset, s.elementBytes, unsafe.Pointer(&v), nil); err == nil {
 				if v > 1 {
@@ -1240,9 +1267,13 @@ func (s *openCLWaveSolver) Step(field *waveField, walls []bool, steps int, walls
 				} else if v < -1 {
 					v = -1
 				}
-				s.centerSample = v
+				return v
 			}
+			return 0
 		}
+		s.earLeftSample = readOne(leftIndex)
+		s.earRightSample = readOne(rightIndex)
+		s.centerSample = 0.5 * (s.earLeftSample + s.earRightSample)
 	}
 	if err := s.setRenderSource(lastFrameOnly); err != nil {
 		return fmt.Errorf("configuring render source: %w", err)
@@ -1306,9 +1337,9 @@ func (s *openCLWaveSolver) Close() {
 		s.impulseIndexBuf.Release()
 		s.impulseIndexBuf = nil
 	}
-	if s.centerSampleBuf != nil {
-		s.centerSampleBuf.Release()
-		s.centerSampleBuf = nil
+	if s.earSampleBuf != nil {
+		s.earSampleBuf.Release()
+		s.earSampleBuf = nil
 	}
 	if s.nextBuf != nil {
 		s.nextBuf.Release()
@@ -1371,11 +1402,28 @@ func (s *openCLWaveSolver) CenterSample() float32 {
 	return s.centerSample
 }
 
-func (s *openCLWaveSolver) CenterSamples() []float32 {
-	if s.lastSampleCount <= 0 || s.lastSampleCount > len(s.hostCenterSamples) {
+func (s *openCLWaveSolver) EarSample() (float32, float32) {
+	return s.earLeftSample, s.earRightSample
+}
+
+func (s *openCLWaveSolver) EarSamplesInterleaved() []float32 {
+	if s.lastSampleCount <= 0 || s.lastSampleCount*2 > len(s.hostEarSamples) {
 		return nil
 	}
-	return s.hostCenterSamples[:s.lastSampleCount]
+	return s.hostEarSamples[:s.lastSampleCount*2]
+}
+
+func (s *openCLWaveSolver) CenterSamples() []float32 {
+	// Backward-compatible mono view of the ear samples (simple average).
+	if s.lastSampleCount <= 0 || s.lastSampleCount*2 > len(s.hostEarSamples) {
+		return nil
+	}
+	s.hostCenterMono = ensureFloat32Slice(s.hostCenterMono, s.lastSampleCount)
+	for i := 0; i < s.lastSampleCount; i++ {
+		base := i * 2
+		s.hostCenterMono[i] = 0.5 * (s.hostEarSamples[base] + s.hostEarSamples[base+1])
+	}
+	return s.hostCenterMono[:s.lastSampleCount]
 }
 
 func (s *openCLWaveSolver) waitForPixelEvent() error {

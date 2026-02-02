@@ -8,7 +8,7 @@ import "time"
 const (
 	w, h                     = 800, 800
 	windowScale              = 2
-	defaultCellSizeM         = 0.025
+	defaultCellSizeM         = 0.0125
 	defaultAirTempC          = 20.0
 	defaultRT60Seconds       = 1.2
 	emitterRad               = 1
