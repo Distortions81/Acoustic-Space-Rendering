@@ -15,18 +15,27 @@ func (g *Game) handleControlToggle() {
 	}
 }
 
+func tickSeconds() float64 {
+	tps := ebiten.ActualTPS()
+	if tps <= 0 {
+		tps = defaultTPS
+	}
+	if tps <= 0 {
+		return 0
+	}
+	return 1.0 / tps
+}
+
 func movementStepCellsPerTick(speedMPS float64) float64 {
-	dxMeters := defaultCellSizeM
-	if cellSizeMFlag != nil {
-		dxMeters = *cellSizeMFlag
-	}
-	if dxMeters <= 0 {
-		dxMeters = defaultCellSizeM
-	}
+	dxMeters := cellSizeMeters()
 	if speedMPS < 0 {
 		speedMPS = 0
 	}
-	return speedMPS * (1.0 / defaultTPS) / dxMeters
+	dt := tickSeconds()
+	if dt <= 0 {
+		return 0
+	}
+	return speedMPS * dt / dxMeters
 }
 
 // enableAutoWalk schedules scripted movement for a limited duration.
@@ -147,5 +156,9 @@ func (g *Game) adjustSimMultiplier(delta int) {
 
 // simStepsPerSecond returns the nominal simulation steps executed each second.
 func (g *Game) simStepsPerSecond() float64 {
-	return defaultTPS * float64(g.simStepMultiplier)
+	tps := ebiten.ActualTPS()
+	if tps <= 0 {
+		tps = defaultTPS
+	}
+	return tps * float64(g.simStepMultiplier)
 }

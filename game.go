@@ -6,6 +6,7 @@ import (
 	"math/rand"
 	"time"
 
+	"github.com/hajimehoshi/ebiten/v2"
 	"github.com/hajimehoshi/ebiten/v2/audio"
 )
 
@@ -239,7 +240,11 @@ func (g *Game) Update() error {
 	}
 
 	leftIndex, rightIndex, _ := g.listenerEarIndices()
-	if err := g.gpuSolver.Step(g.field, g.walls, steps, g.wallsDirty, *showWallsFlag, *lastFrameOnlyFlag, *occludeLineOfSightFlag, visibleStamp, visibleGen, leftIndex, rightIndex, emitterData); err != nil {
+	updateTPS := ebiten.ActualTPS()
+	if updateTPS <= 0 {
+		updateTPS = defaultTPS
+	}
+	if err := g.gpuSolver.Step(g.field, g.walls, steps, updateTPS, g.wallsDirty, *showWallsFlag, *lastFrameOnlyFlag, *occludeLineOfSightFlag, visibleStamp, visibleGen, leftIndex, rightIndex, emitterData); err != nil {
 		return err
 	}
 	if captureStepSamplesFlag != nil && *captureStepSamplesFlag && g.gpuSolver != nil {

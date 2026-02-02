@@ -29,9 +29,7 @@ func speedOfSoundMS(tempC float64) float64 {
 
 func computeWaveCoefficients(stepsPerSecond float64) (waveCoefficients, error) {
 	dx := 0.0
-	if cellSizeMFlag != nil {
-		dx = *cellSizeMFlag
-	}
+	dx = cellSizeMeters()
 	if dx <= 0 {
 		return waveCoefficients{}, fmt.Errorf("cell size must be > 0 meters (got %.6f)", dx)
 	}

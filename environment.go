@@ -7,6 +7,15 @@ import (
 )
 
 func cellSizeMeters() float64 {
+	if worldWidthFeetFlag != nil && *worldWidthFeetFlag > 0 {
+		return (*worldWidthFeetFlag * 0.3048) / float64(w)
+	}
+	if cellSizeMMFlag != nil && *cellSizeMMFlag > 0 {
+		return *cellSizeMMFlag / 1000.0
+	}
+	if cellSizeCMFlag != nil && *cellSizeCMFlag > 0 {
+		return *cellSizeCMFlag / 100.0
+	}
 	if cellSizeMFlag != nil && *cellSizeMFlag > 0 {
 		return *cellSizeMFlag
 	}

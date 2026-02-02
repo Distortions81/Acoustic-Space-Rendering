@@ -84,6 +84,9 @@ Customize simulation behavior with additional flags:
 - `-emitter-gain=<value>` — scales `-audio-loop` samples before they are injected into the wave field (default `0.25`).
 - `-air-abs-dbpm=<value>` — approximate air absorption in dB per meter (amplitude), applied as extra per-step damping (default `0.01`).
 - `-cell-size-m=<value>` — sets the physical size of one grid cell in meters; used to compute solver coefficients from real-world units (default `0.025`).
+- `-cell-size-cm=<value>` — sets the physical size of one grid cell in centimeters (overrides `-cell-size-m` when `>0`).
+- `-cell-size-mm=<value>` — sets the physical size of one grid cell in millimeters (overrides `-cell-size-m` when `>0`).
+- `-world-width-ft=<value>` — sets the physical world width in feet (overrides cell size flags when `>0`).
 - `-air-temp-c=<value>` — sets air temperature in °C; used to compute speed of sound for the solver (default `20`).
 - `-rt60-s=<value>` — sets an approximate RT60 decay time in seconds; used to compute per-step damping (`<=0` disables damping; default `1.2`).
 - `-run-speed-mps=<value>` — sets listener running speed in meters/second; used for WASD/autowalk movement (default `3.0`).

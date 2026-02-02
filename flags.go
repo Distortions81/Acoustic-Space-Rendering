@@ -57,6 +57,16 @@ var (
 	// cellSizeMFlag defines the physical size of one grid cell in meters.
 	cellSizeMFlag = flag.Float64("cell-size-m", defaultCellSizeM, "meters per grid cell used for solver coefficient calibration")
 
+	// cellSizeCMFlag defines the physical size of one grid cell in centimeters. When set to >0, it overrides -cell-size-m.
+	cellSizeCMFlag = flag.Float64("cell-size-cm", 0, "centimeters per grid cell (overrides -cell-size-m when >0)")
+
+	// cellSizeMMFlag defines the physical size of one grid cell in millimeters. When set to >0, it overrides -cell-size-m.
+	cellSizeMMFlag = flag.Float64("cell-size-mm", 0, "millimeters per grid cell (overrides -cell-size-m when >0)")
+
+	// worldWidthFeetFlag sets the physical world width in feet. When set to >0, it
+	// overrides the other cell size flags by defining dx = worldWidthFeet / w.
+	worldWidthFeetFlag = flag.Float64("world-width-ft", 0, "physical world width in feet (overrides cell size flags when >0)")
+
 	// airTempCFlag configures the air temperature (°C) used to compute the speed of sound.
 	airTempCFlag = flag.Float64("air-temp-c", defaultAirTempC, "air temperature in °C used to compute the speed of sound")
 

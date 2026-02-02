@@ -8,13 +8,14 @@ import "time"
 const (
 	w, h                     = 640, 640
 	windowScale              = 2
-	defaultCellSizeM         = 0.0125
+	defaultWorldWidthFeet    = 100
+	defaultCellSizeM         = defaultWorldWidthFeet * 0.3048 / float64(w)
 	defaultAirTempC          = 20.0
 	defaultRT60Seconds       = 1.2
 	emitterRad               = 1
 	defaultWalkSpeedMPS      = 1.4
 	defaultRunSpeedMPS       = 3.0
-	defaultEmitterGain       = 0.25
+	defaultEmitterGain       = 0.1
 	stepDelay                = 60 / 4
 	defaultTPS               = 60.0
 	defaultSimMultiplier     = 735
@@ -24,7 +25,7 @@ const (
 	earOffsetCells           = 5
 	defaultBoundaryReflect   = 0.98
 	defaultAirAbsDbPerM      = 0.01
-	visualGamma              = 1.5
+	visualGamma              = 1.0
 	stepImpulseStrength      = 20.0
 	defaultWallSegments      = 10
 	defaultWallMinLenM       = 1.0
